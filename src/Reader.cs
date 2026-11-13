@@ -103,9 +103,10 @@ namespace RFIDlibra
         /// </summary>
         public int TimeoutMs = 150;
         public int InventoryTimeoutMs = 500;
+        public int WriteTimeoutMs = 500;
 
         /// <summary>Mindste pause (ms) fra et svar til næste kommando sendes. Afprøves i selvtesten.</summary>
-        public int GapMs = 0;
+        public int GapMs = 5;
 
         /// <summary>Hvordan tabte svar blev reddet: ved nyt forsøg på samme forbindelse, efter genåbning, eller slet ikke.</summary>
         public int RescuedSameHandle, RescuedReopen, GaveUp;
@@ -135,14 +136,19 @@ namespace RFIDlibra
         public Protocol.Response Send(byte cmd, byte[] data, string what)
         {
             if (!IsOpen) return null;
-            bool inventory = cmd == Protocol.CMD_ISO && data != null && data.Length > 0 && data[0] == Protocol.ISO_INVENTORY;
+            if (cmd == Protocol.CMD_ISO && (data == null || data.Length == 0 || Array.IndexOf(Protocol.AllowedIso, data[0]) < 0))
+                throw new InvalidOperationException("ISO-kommando er ikke tilladt");
+            byte iso = cmd == Protocol.CMD_ISO ? data[0] : (byte)0;
+            int timeout = iso == Protocol.ISO_INVENTORY ? InventoryTimeoutMs
+                : iso == Protocol.ISO_WRITE_BLOCKS || iso == Protocol.ISO_WRITE_AFI ? WriteTimeoutMs
+                : TimeoutMs;
             byte[] frame = Protocol.Build(Advanced, Address, cmd, data);
             Stopwatch total = Stopwatch.StartNew();
             int maxTries = SameHandleTries + AfterReopenTries;
             for (int attempt = 1; attempt <= maxTries; attempt++)
             {
                 if (!IsOpen) break;
-                ApplyTimeout(inventory ? InventoryTimeoutMs : TimeoutMs);
+                ApplyTimeout(timeout);
                 long wait = GapMs - sinceLast.ElapsedMilliseconds;
                 if (wait > 0) System.Threading.Thread.Sleep((int)wait);
 
@@ -317,6 +323,58 @@ namespace RFIDlibra
             method = "8 blokke på én gang";
             byte[] all = ReadBlocksOnce(uid, 0, 8);
             return all != null && all.Length == 32 ? all : null;
+        }
+
+        /// <summary>Skriver AFI (alarm) og læser den igen for at kontrollere den. Prøver op til 3 gange.</summary>
+        public bool WriteAfi(byte[] uid, int value, out string error)
+        {
+            error = null;
+            for (int i = 1; i <= 3; i++)
+            {
+                Protocol.Response r = Send(Protocol.CMD_ISO, Addressed(Protocol.ISO_WRITE_AFI, uid, (byte)value), "skriv alarm 0x" + value.ToString("X2"));
+                if (r != null && r.Status != 0x00) error = "læseren svarede " + Protocol.StatusText(r.Status);
+                int? check = ReadAfi(uid);
+                if (check == value) return true;
+                if (check != null) error = "alarmen står stadig som 0x" + check.Value.ToString("X2");
+                else if (error == null) error = "kunne ikke kontrollere alarmen";
+                if (!IsOpen) break;
+                log.Write("  Alarmen blev ikke bekræftet (" + error + ") - prøver igen.");
+            }
+            return false;
+        }
+
+        /// <summary>Skriver blok 0-7 (32 bytes) og læser dem igen for at kontrollere dem. Prøver op til 3 gange.</summary>
+        public bool WriteDanish(byte[] uid, byte[] data32, out string error)
+        {
+            error = null;
+            if (data32 == null || data32.Length != 32) { error = "forkert datalængde"; return false; }
+            byte[] extra = new byte[3 + 32];
+            extra[0] = 0x00; // første blok
+            extra[1] = 0x08; // antal blokke
+            extra[2] = 0x04; // bytes pr. blok
+            for (int blk = 0; blk < 8; blk++)
+                for (int k = 0; k < 4; k++)
+                    extra[3 + blk * 4 + k] = data32[blk * 4 + 3 - k]; // FEIG vil have hver blok i omvendt rækkefølge
+            for (int i = 1; i <= 3; i++)
+            {
+                Protocol.Response r = Send(Protocol.CMD_ISO, Addressed(Protocol.ISO_WRITE_BLOCKS, uid, extra), "skriv blok 0-7");
+                if (r != null && r.Status != 0x00) error = "læseren svarede " + Protocol.StatusText(r.Status);
+                string m;
+                byte[] check = ReadDanish(uid, out m);
+                if (check != null && BytesEqual(check, data32)) return true;
+                if (check != null) error = "kontrol-læsningen viste andre data";
+                else if (error == null) error = "kunne ikke kontrollere det skrevne";
+                if (!IsOpen) break;
+                log.Write("  Skrivningen blev ikke bekræftet (" + error + ") - prøver igen.");
+            }
+            return false;
+        }
+
+        private static bool BytesEqual(byte[] a, byte[] b)
+        {
+            if (a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+            return true;
         }
     }
 }

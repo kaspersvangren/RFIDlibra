@@ -2,7 +2,13 @@
 
 Eget Windows-program, der skal få bibliotekets FEIG RFID-læsere (fx den lille **ID ISC.PR101**) til at virke med Cicero Mobile, ligesom [NFClibra](https://github.com/kaspersvangren/NFClibra) gør det på telefonen.
 
-**Status: testudgave 0.4.0.** Programmet taler endnu ikke med Cicero. Det finder læseren, viser de tags, der ligger på den, og logger alt, så vi kan se, hvad den gamle PR101 kan klare.
+**Status: testudgave 0.5.0.** Første udgave, der taler med Cicero Mobile. Programmet er et almindeligt vindue, der skal være åbent; en udgave i systembakken kommer senere.
+
+## Opsætning i Cicero Mobile
+
+I Enhedsindstillinger → RFID: vælg leverandøren **Deichman**, adresse **localhost**, port **1667**. Tag-dataformatet skal være "Danish Item". Vinduet viser "Cicero: lytter", når Cicero har forbindelse.
+
+staffConnect link må ikke køre samtidig på samme pc, for den tager læseren.
 
 Seneste version: [RFIDlibra.exe](https://github.com/kaspersvangren/rfidlibra/releases/latest/download/RFIDlibra.exe) (64-bit) og [RFIDlibra-32bit.exe](https://github.com/kaspersvangren/rfidlibra/releases/latest/download/RFIDlibra-32bit.exe) (til 32-bit feusb-filer, fx fra den gamle Bibliotheca-software)
 

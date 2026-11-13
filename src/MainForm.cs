@@ -8,9 +8,9 @@ using System.Windows.Forms;
 
 namespace RFIDlibra
 {
-    public sealed class MainForm : Form
+    public sealed class MainForm : Form, CiceroServer.IHub
     {
-        public const string Version = "0.4.0";
+        public const string Version = "0.5.0";
 
         private readonly Log log = new Log();
         private Feusb usb;
@@ -27,16 +27,21 @@ namespace RFIDlibra
         private readonly ComboBox dllBox = new ComboBox();
         private readonly Button pickDll = new Button();
         private bool filling;
+        private readonly Label cicero = new Label();
+        private readonly TextBox library = new TextBox();
+        private CiceroServer server;
+        private string mode = "IDLE";
 
         public MainForm()
         {
-            Text = "RFIDlibra " + Version + " (" + (Environment.Is64BitProcess ? "64" : "32") + "-bit) - test af læser";
+            Text = "RFIDlibra " + Version + " (" + (Environment.Is64BitProcess ? "64" : "32") + "-bit) - FEIG-læser til Cicero";
             Width = 1000;
             Height = 700;
             Font = new Font("Segoe UI", 9.5f);
             StartPosition = FormStartPosition.CenterScreen;
 
-            TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(8) };
+            TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(8) };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 35));
@@ -64,7 +69,7 @@ namespace RFIDlibra
             selfTest.Enabled = false;
             selfTest.Click += (s, e) => { if (worker != null) worker.RequestSelfTest(); };
             raw.Text = "Rå data i loggen";
-            raw.Checked = true;
+            raw.Checked = false;
             raw.AutoSize = true;
             raw.Padding = new Padding(8, 6, 0, 0);
             raw.CheckedChanged += (s, e) => { if (worker != null) worker.LogRaw = raw.Checked; };
@@ -75,6 +80,24 @@ namespace RFIDlibra
             top.Controls.AddRange(new Control[] { connect, selfTest, raw, status });
             root.Controls.Add(top);
 
+            FlowLayoutPanel ciceroRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
+            cicero.AutoSize = true;
+            cicero.Padding = new Padding(0, 6, 24, 0);
+            cicero.Font = new Font(Font, FontStyle.Bold);
+            cicero.Text = "Cicero: starter ...";
+            Label libLabel = new Label { Text = "Biblioteksnummer til nye chips:", AutoSize = true, Padding = new Padding(0, 6, 0, 0) };
+            library.Width = 110;
+            library.Text = LoadSetting("library.txt");
+            library.TextChanged += (s, e) =>
+            {
+                string v = library.Text.Trim();
+                SaveSetting("library.txt", v);
+                if (worker != null) worker.LibraryForNewChips = v;
+            };
+            Label libHint = new Label { Text = "(tomt = samme som bøgerne på læseren)", AutoSize = true, Padding = new Padding(4, 6, 0, 0), ForeColor = SystemColors.GrayText };
+            ciceroRow.Controls.AddRange(new Control[] { cicero, libLabel, library, libHint });
+            root.Controls.Add(ciceroRow);
+
             list.Dock = DockStyle.Fill;
             list.View = View.Details;
             list.FullRowSelect = true;
@@ -83,9 +106,8 @@ namespace RFIDlibra
             list.Columns.Add("Materialenummer", 140);
             list.Columns.Add("Del", 60);
             list.Columns.Add("Bibliotek", 110);
-            list.Columns.Add("Alarm", 100);
-            list.Columns.Add("Læst med", 150);
-            list.Columns.Add("Bemærkning", 200);
+            list.Columns.Add("Alarm", 80);
+            list.Columns.Add("Bemærkning", 300);
             root.Controls.Add(list);
 
             logBox.Dock = DockStyle.Fill;
@@ -108,7 +130,11 @@ namespace RFIDlibra
 
             log.Line += OnLogLine;
             Load += (s, e) => Startup();
-            FormClosing += (s, e) => { if (worker != null) worker.Stop(); };
+            FormClosing += (s, e) =>
+            {
+                if (worker != null) worker.Stop();
+                if (server != null) server.Stop();
+            };
         }
 
         private static string SettingsFile
@@ -118,6 +144,66 @@ namespace RFIDlibra
                 string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RFIDlibra");
                 Directory.CreateDirectory(dir);
                 return Path.Combine(dir, "feusb-" + (Environment.Is64BitProcess ? "64" : "32") + "bit.txt");
+            }
+        }
+
+        private static string SettingPath(string name)
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RFIDlibra");
+            Directory.CreateDirectory(dir);
+            return Path.Combine(dir, name);
+        }
+
+        private static string LoadSetting(string name)
+        {
+            try { string f = SettingPath(name); return File.Exists(f) ? File.ReadAllText(f).Trim() : ""; } catch { return ""; }
+        }
+
+        private static void SaveSetting(string name, string value)
+        {
+            try { File.WriteAllText(SettingPath(name), value); } catch { }
+        }
+
+        // ---------- Cicero (serveren kalder disse; de sendes videre til læserens arbejdstråd) ----------
+
+        private Worker Current
+        {
+            get { Worker w = worker; if (w == null || !w.Running) throw new InvalidOperationException("Reader not connected"); return w; }
+        }
+
+        string CiceroServer.IHub.StatusJson() { return Current.StatusJson(); }
+        string CiceroServer.IHub.InventoryJson() { Worker w = worker; return w != null && w.Running ? w.InventoryJson() : "{}"; }
+        CiceroServer.Result CiceroServer.IHub.Alarm(bool on) { return Current.Alarm(on); }
+        CiceroServer.Result CiceroServer.IHub.Write(string barcode) { return Current.Write(barcode); }
+        CiceroServer.Result CiceroServer.IHub.WriteTagBarcode(string tagId, string barcode) { return Current.WriteTagBarcode(tagId, barcode); }
+        void CiceroServer.IHub.OnClientConnected() { Worker w = worker; if (w != null && w.Running) w.OnClientConnected(); }
+        string CiceroServer.IHub.Mode { get { return mode; } set { mode = value; Worker w = worker; if (w != null) w.Mode = value; } }
+
+        private void StartServer()
+        {
+            server = new CiceroServer(log, this);
+            server.ClientsChanged += () => UI(UpdateCicero);
+            server.Start();
+            UpdateCicero();
+        }
+
+        private void UpdateCicero()
+        {
+            if (server == null) return;
+            if (server.BindError != null)
+            {
+                cicero.Text = "Cicero: " + server.BindError;
+                cicero.ForeColor = Color.Firebrick;
+            }
+            else if (server.ClientCount > 0)
+            {
+                cicero.Text = "Cicero: lytter";
+                cicero.ForeColor = Color.ForestGreen;
+            }
+            else
+            {
+                cicero.Text = "Cicero: lytter ikke (localhost:" + CiceroServer.Port + ", \"Deichman\")";
+                cicero.ForeColor = SystemColors.ControlText;
             }
         }
 
@@ -131,6 +217,7 @@ namespace RFIDlibra
             log.Write("RFIDlibra " + Version + " startet. " + (Environment.Is64BitProcess ? "64" : "32") + "-bit, Windows " + Environment.OSVersion.Version);
             if (log.FilePath != null) log.Write("Loggen gemmes også her: " + log.FilePath);
             WarnIfStaffConnectRuns();
+            StartServer();
 
             string saved = SavedDll();
             List<Feusb.Candidate> found = Feusb.FindCandidates(saved);
@@ -236,7 +323,7 @@ namespace RFIDlibra
                 log.Write("Afbrudt.");
                 return;
             }
-            worker = new Worker(usb, log) { LogRaw = raw.Checked };
+            worker = new Worker(usb, log) { LogRaw = raw.Checked, Server = server, LibraryForNewChips = library.Text.Trim(), Mode = mode };
             worker.Status += s => UI(() => status.Text = s);
             worker.TagsChanged += t => UI(() => ShowTags(t));
             worker.Start();
@@ -250,7 +337,7 @@ namespace RFIDlibra
             list.Items.Clear();
             foreach (TagView t in tags.OrderBy(x => x.Barcode).ThenBy(x => x.Uid))
             {
-                ListViewItem it = new ListViewItem(new[] { t.Uid, t.Barcode, t.Part, t.Library, t.Alarm, t.Method, t.Note });
+                ListViewItem it = new ListViewItem(new[] { t.Uid, t.Barcode, t.Part, t.Library, t.Alarm, t.Note });
                 list.Items.Add(it);
             }
             list.EndUpdate();

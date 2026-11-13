@@ -17,7 +17,15 @@ namespace RFIDlibra
 
         public const byte ISO_INVENTORY = 0x01;
         public const byte ISO_READ_BLOCKS = 0x23;
+        public const byte ISO_WRITE_BLOCKS = 0x24;
+        public const byte ISO_WRITE_AFI = 0x27;
         public const byte ISO_SYSINFO = 0x2B;
+
+        /// <summary>
+        /// De eneste ISO-kommandoer, programmet må sende. Lås-kommandoerne (0x22 lås blok, 0x28 lås AFI,
+        /// 0x2A lås DSFID) kan ikke fortrydes og må aldrig sendes - heller ikke ved en fejl i koden.
+        /// </summary>
+        public static readonly byte[] AllowedIso = { ISO_INVENTORY, ISO_READ_BLOCKS, ISO_WRITE_BLOCKS, ISO_WRITE_AFI, ISO_SYSINFO };
 
         public static ushort Crc(byte[] b, int offset, int count)
         {
