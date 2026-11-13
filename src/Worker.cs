@@ -19,6 +19,9 @@ namespace RFIDlibra
         public string Library = "";
         public string Alarm = "";
         public string Note = "";
+        public string Kind = "unread";   // blank / danish / unknown / unread
+        public int Seq, Num;
+        public int? Afi;
     }
 
     /// <summary>
@@ -60,6 +63,8 @@ namespace RFIDlibra
         public volatile string ReaderText = "Starter ...";
         public volatile string StatsText = "";
         public volatile string ReaderName = "";
+        /// <summary>Det samme som TagsJson, men til skrankevinduet.</summary>
+        public volatile TagView[] Views = new TagView[0];
 
         public volatile bool LogRaw = false;
 
@@ -115,19 +120,21 @@ namespace RFIDlibra
             foreach (TagState t in tags.Values) { if (sb.Length > 1) sb.Append(','); sb.Append(t.ToUiJson("")); }
             foreach (TagState t in pending.Values) { if (sb.Length > 1) sb.Append(','); sb.Append(t.ToUiJson("kunne ikke læses endnu")); }
             TagsJson = sb.Append(']').ToString();
-            Action<List<TagView>> h = TagsChanged;
-            if (h == null) return;
             List<TagView> list = new List<TagView>();
             foreach (TagState t in tags.Values) list.Add(View(t, ""));
             foreach (TagState t in pending.Values) list.Add(View(t, "kunne ikke læses endnu (" + t.ReadFails + " forsøg)"));
-            h(list);
+            Views = list.ToArray();
+            Action<List<TagView>> h = TagsChanged;
+            if (h != null) h(list);
         }
 
         private static TagView View(TagState t, string note)
         {
-            TagView v = new TagView { Uid = t.Mac, Alarm = t.AlarmText, Note = note };
+            TagView v = new TagView { Uid = t.Mac, Alarm = t.AlarmText, Note = note, Kind = t.Kind, Afi = t.Afi };
             if (t.Content != null)
             {
+                v.Seq = t.Content.SeqNum;
+                v.Num = t.Content.NumItems;
                 v.Barcode = t.Content.Barcode;
                 v.Part = t.Content.Part;
                 v.Library = (t.Content.Country + "-" + t.Content.Library).Trim('-');
@@ -201,6 +208,8 @@ namespace RFIDlibra
             {
                 reader.Close();
                 running = false;
+                Views = new TagView[0];
+                TagsJson = "[]";
                 SetStatus("Stoppet");
                 Action a;
                 while (jobs.TryTake(out a)) try { a(); } catch { }

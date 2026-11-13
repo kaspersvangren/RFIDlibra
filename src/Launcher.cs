@@ -5,12 +5,23 @@ using System.Reflection;
 
 namespace RFIDlibra
 {
-    /// <summary>Åbner brugerfladen i et rent Edge-vindue, og styrer "Start med Windows" (genvej i Start-mappen).</summary>
+    /// <summary>Åbner værktøj, indstillinger og fejlfinding i hver sit rene Edge-vindue, og styrer "Start med Windows" (genvej i Start-mappen).</summary>
     public static class Launcher
     {
-        public static string UiUrl(string token, string tab)
+        public static string UiUrl(string token, string page)
         {
-            return "http://localhost:" + CiceroServer.Port + "/app?t=" + token + (string.IsNullOrEmpty(tab) ? "" : "#" + tab);
+            return "http://localhost:" + CiceroServer.Port + "/app?t=" + token + (string.IsNullOrEmpty(page) ? "" : "#" + page);
+        }
+
+        private static string WindowSize(string page)
+        {
+            switch (page)
+            {
+                case "vaerktoej": return "1060,800";
+                case "indstillinger": return "760,720";
+                case "fejlfinding": return "1000,740";
+                default: return "1060,800";
+            }
         }
 
         private static string FindEdge()
@@ -31,15 +42,15 @@ namespace RFIDlibra
         }
 
         /// <summary>Edge i "app"-tilstand: et almindeligt vindue uden adresselinje og faner. Ellers standardbrowseren.</summary>
-        public static void OpenUi(string token, string tab, Log log)
+        public static void OpenUi(string token, string page, Log log)
         {
-            string url = UiUrl(token, tab);
+            string url = UiUrl(token, page);
             try
             {
                 string edge = FindEdge();
                 if (edge != null)
                 {
-                    Process.Start(new ProcessStartInfo(edge, "--app=\"" + url + "\" --window-size=1180,820") { UseShellExecute = false });
+                    Process.Start(new ProcessStartInfo(edge, "--app=\"" + url + "\" --window-size=" + WindowSize(page)) { UseShellExecute = false });
                     return;
                 }
                 Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
@@ -70,7 +81,7 @@ namespace RFIDlibra
 
         /// <summary>
         /// Slår "Start med Windows" til: programmet kopieres til et fast sted, og der lægges en genvej i Start-mappen,
-        /// som starter det i baggrunden (kun ikonet ved uret). Returnerer en besked til brugeren.
+        /// som starter det i baggrunden (skrankevinduet og ikonet ved uret). Returnerer en besked til brugeren.
         /// </summary>
         public static string EnableAutostart()
         {

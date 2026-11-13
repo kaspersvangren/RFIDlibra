@@ -13,7 +13,7 @@ namespace RFIDlibra
 {
     public static class AppInfo
     {
-        public const string Version = "0.6.0";
+        public const string Version = "0.7.0";
 
         public static string DataDir
         {
@@ -39,10 +39,10 @@ namespace RFIDlibra
     }
 
     /// <summary>
-    /// Programmet: ikon ved uret, Cicero-serveren, læserens arbejdstråd og brugerfladen.
-    /// Der er intet fast vindue; brugerfladen åbnes i et Edge-vindue fra ikonet.
+    /// Programmet: ikon ved uret, skrankevinduet, Cicero-serveren og læserens arbejdstråd.
+    /// Værktøj, indstillinger og fejlfinding åbnes hver i sit Edge-vindue.
     /// </summary>
-    public sealed class App : ApplicationContext
+    public sealed class App : ApplicationContext, IWidgetSource
     {
         public readonly Log Log = new Log();
         public Worker Worker { get; private set; }
@@ -60,6 +60,7 @@ namespace RFIDlibra
         private string iconKey;
         private volatile string library;
         private readonly Control invoker = new Control();   // til at køre ting på brugerfladens tråd (COM, menuer)
+        private readonly Widget widget;
 
         public App(bool background)
         {
@@ -78,9 +79,8 @@ namespace RFIDlibra
             server.Start();
 
             ContextMenuStrip menu = new ContextMenuStrip();
-            menu.Items.Add("Åbn RFIDlibra", null, (s, e) => Open(""));
-            menu.Items.Add("Værktøj til tags", null, (s, e) => Open("vaerktoej"));
-            menu.Items.Add("Fejlfinding", null, (s, e) => Open("fejlfinding"));
+            menu.Items.Add("Vis skrankevinduet", null, (s, e) => ShowWidget());
+            AddPages(menu);
             menu.Items.Add(new ToolStripSeparator());
             autostartItem = new ToolStripMenuItem("Start med Windows") { Checked = Launcher.AutostartEnabled };
             autostartItem.Click += (s, e) => MessageBox.Show(SetAutostart(!Launcher.AutostartEnabled), "RFIDlibra");
@@ -89,8 +89,14 @@ namespace RFIDlibra
             menu.Items.Add("Afslut", null, (s, e) => Quit());
             menu.Items[0].Font = new Font(menu.Items[0].Font, FontStyle.Bold);
             tray.ContextMenuStrip = menu;
-            tray.DoubleClick += (s, e) => Open("");
-            tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) Open(""); };
+            tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) ShowWidget(); };
+
+            ContextMenuStrip wmenu = new ContextMenuStrip();
+            AddPages(wmenu);
+            wmenu.Items.Add(new ToolStripSeparator());
+            wmenu.Items.Add("Skjul vinduet", null, (s, e) => { widget.HideWidget(); Log.Write("Skrankevinduet er skjult - vis det igen fra ikonet ved uret."); });
+            wmenu.Items.Add("Afslut RFIDlibra", null, (s, e) => Quit());
+            widget = new Widget(this, wmenu);
             tray.Text = "RFIDlibra";
             UpdateTray();
             tray.Visible = true;
@@ -101,12 +107,58 @@ namespace RFIDlibra
             timer.Tick += (s, e) => { UpdateTray(); if ((DateTime.Now - lastServiceCheck).TotalSeconds > 10) CheckServices(); };
             timer.Start();
 
-            if (!background) Open("");
+            if (!Widget.StartHidden) widget.ShowWidget();
+            else Log.Write("Skrankevinduet er skjult - vis det fra ikonet ved uret.");
         }
 
-        public void Open(string tab)
+        private void AddPages(ContextMenuStrip m)
         {
-            Launcher.OpenUi(token, tab, Log);
+            m.Items.Add("Værktøj til tags", null, (s, e) => Open("vaerktoej"));
+            m.Items.Add("Indstillinger", null, (s, e) => Open("indstillinger"));
+            m.Items.Add("Fejlfinding", null, (s, e) => Open("fejlfinding"));
+        }
+
+        public void Open(string page)
+        {
+            Launcher.OpenUi(token, page, Log);
+        }
+
+        /// <summary>Viser skrankevinduet (kan kaldes fra alle tråde, fx når programmet startes igen).</summary>
+        public void ShowWidget()
+        {
+            if (invoker.InvokeRequired) { invoker.BeginInvoke((Action)ShowWidget); return; }
+            widget.ShowWidget();
+        }
+
+        // ---------- Skrankevinduet ----------
+
+        public WidgetState GetWidgetState()
+        {
+            Worker w = Worker;
+            bool readerOk = w != null && w.Running && w.ReaderOk;
+            return new WidgetState
+            {
+                ReaderOk = readerOk,
+                ReaderText = usbError ?? (w == null ? "Starter ..." : w.ReaderText),
+                Listening = server.ClientCount > 0,
+                BindError = server.BindError,
+                StaffConnect = staffConnect,
+                Tags = readerOk ? w.Views : new TagView[0],
+            };
+        }
+
+        /// <summary>Alarm til/fra på alle bøger på læseren (knapperne i skrankevinduet). Returnerer null, når det lykkedes.</summary>
+        public string AlarmAll(bool on)
+        {
+            Worker w = Worker;
+            if (w == null || !w.Running) return "Læseren er ikke forbundet";
+            Log.Write("Skrankevinduet: alarm " + (on ? "TIL" : "FRA") + " på alle bøger");
+            CiceroServer.Result r;
+            try { r = w.Alarm(on); }
+            catch (Exception e) { return e.Message; }
+            if (r.Code == 200) return null;
+            if (r.Code == 400) return "Der ligger ingen bøger på læseren";
+            return "Alarmen blev ikke ændret på alle bøger - prøv igen";
         }
 
         // ---------- Læseren ----------
@@ -289,6 +341,7 @@ namespace RFIDlibra
             server.Stop();
             tray.Visible = false;
             tray.Dispose();
+            widget.Close();
             ExitThread();
         }
 

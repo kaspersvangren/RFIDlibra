@@ -89,6 +89,7 @@ namespace RFIDlibra
                             return;
                         }
                     case "reconnect": app.Reconnect(); Ok(outp, "Forbinder igen"); return;
+                    case "show": app.ShowWidget(); Ok(outp, ""); return;
                     case "tool/alarm": Tool(outp, app.Worker == null ? null : app.Worker.ToolAlarm(Q(req, "mac"), Q(req, "on") == "1")); return;
                     case "tool/reset": Tool(outp, app.Worker == null ? null : app.Worker.ToolReset(Q(req, "mac"))); return;
                     case "tool/program":
