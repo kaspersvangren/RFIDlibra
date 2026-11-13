@@ -19,8 +19,60 @@ namespace RFIDlibra
         public int Dsfid;
         public int? Afi;
         public TagContent Content;  // null = ikke læst
+        public byte[] Raw;          // blok 0-7 som læst (32 bytes)
         public int Misses;          // antal inventory-runder i træk, hvor tagget ikke var med
         public int ReadFails;
+
+        /// <summary>"blank" (tom chip), "danish" (dansk datamodel), "unknown" (andet indhold) eller "unread".</summary>
+        public string Kind
+        {
+            get
+            {
+                if (Raw == null) return "unread";
+                bool blank = true;
+                foreach (byte b in Raw) if (b != 0) { blank = false; break; }
+                if (blank) return "blank";
+                return Raw[0] == 0x11 ? "danish" : "unknown";
+            }
+        }
+
+        public string Maker
+        {
+            get
+            {
+                if (Uid == null || Uid.Length < 2) return "ukendt";
+                switch (Uid[1])
+                {
+                    case 0x04: return "NXP (ICODE)";
+                    case 0x07: return "Texas Instruments";
+                    case 0x02: return "STMicroelectronics";
+                    case 0x05: return "Infineon";
+                    case 0x16: return "EM Microelectronic";
+                    default: return "producent 0x" + Uid[1].ToString("X2");
+                }
+            }
+        }
+
+        /// <summary>Til brugerfladen (ikke Cicero).</summary>
+        public string ToUiJson(string note)
+        {
+            TagContent c = Content ?? TagContent.Empty();
+            string alarm = Afi == null ? "unknown" : Afi == AFI_ON ? "on" : Afi == AFI_OFF ? "off" : "0x" + Afi.Value.ToString("X2");
+            StringBuilder sb = new StringBuilder("{");
+            sb.Append("\"mac\":").Append(Json.Str(Mac));
+            sb.Append(",\"kind\":").Append(Json.Str(Kind));
+            sb.Append(",\"maker\":").Append(Json.Str(Maker));
+            sb.Append(",\"barcode\":").Append(Json.Str(c.Barcode));
+            sb.Append(",\"seq\":").Append(c.SeqNum);
+            sb.Append(",\"num\":").Append(c.NumItems);
+            sb.Append(",\"country\":").Append(Json.Str(c.Country));
+            sb.Append(",\"library\":").Append(Json.Str(c.Library));
+            sb.Append(",\"crcOk\":").Append(c.CrcOk ? "true" : "false");
+            sb.Append(",\"alarm\":").Append(Json.Str(alarm));
+            sb.Append(",\"fails\":").Append(ReadFails);
+            sb.Append(",\"note\":").Append(Json.Str(note ?? ""));
+            return sb.Append('}').ToString();
+        }
 
         public string AlarmText
         {

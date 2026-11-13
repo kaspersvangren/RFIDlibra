@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFIDlibra</title>
+<style>
+  /*
+    Udtryk: et bibliotek ved skranken. Læseren er en mørk "plade" med et svagt felt omkring sig,
+    bøgerne er hvide etiketter med materialenummeret som det store, og alarmen er en sikringsstrimmel
+    i etikettens kant (orange = alarm til, grøn = alarm fra - som i NFClibra).
+    Skrift: Bahnschrift (Windows' egen DIN-lignende) til numre og overskrifter, Segoe UI til resten.
+  */
+  :root {
+    --petrol: #1d4a57;
+    --petrol-deep: #12333d;
+    --petrol-soft: #e3eef0;
+    --paper: #f3f6f5;
+    --label: #ffffff;
+    --ink: #1c2a2e;
+    --ink-soft: #5b6b70;
+    --line: #d5dfe0;
+    --green: #2b9a5f;
+    --green-soft: #e2f4ea;
+    --amber: #e39b1c;
+    --amber-soft: #fcf0d8;
+    --red: #cc3f3f;
+    --red-soft: #fbe6e6;
+    --display: "Bahnschrift", "DIN Alternate", "Segoe UI", sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --radius-label: 6px;
+    --radius-ui: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #142226;
+      --label: #f7faf9;
+      --ink: #e7efef;
+      --ink-soft: #9db1b5;
+      --line: #2a3f45;
+      --petrol-soft: #1c3138;
+      --green-soft: #183a29;
+      --amber-soft: #3b2f17;
+      --red-soft: #3d1f1f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--body);
+    font-size: 15px;
+    line-height: 1.45;
+    color: var(--ink);
+    background: var(--paper);
+    display: flex;
+    flex-direction: column;
+  }
+  button, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+
+  /* ---------- Top ---------- */
+  header {
+    background: var(--petrol);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    padding: 0 28px;
+    min-height: 64px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand svg { flex: none; }
+  .brand h1 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 22px;
+    letter-spacing: .01em;
+    margin: 0;
+  }
+  .status { display: flex; gap: 22px; margin-left: auto; font-size: 14px; }
+  .status span { display: inline-flex; align-items: center; gap: 8px; opacity: .92; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #8aa; box-shadow: 0 0 0 3px rgba(255,255,255,.12); }
+  .dot.ok { background: #5fd795; }
+  .dot.wait { background: #f2c14e; }
+  .dot.bad { background: #ff7a7a; }
+
+  nav {
+    display: flex;
+    gap: 4px;
+    padding: 0 22px;
+    background: var(--petrol-deep);
+  }
+  nav a {
+    color: #cfe0e3;
+    text-decoration: none;
+    padding: 11px 14px 10px;
+    border-bottom: 3px solid transparent;
+    font-size: 14.5px;
+  }
+  nav a:hover { color: #fff; }
+  nav a.on { color: #fff; border-bottom-color: var(--amber); }
+
+  main { flex: 1; overflow: auto; padding: 24px 28px 40px; }
+  .view { display: none; max-width: 1180px; margin: 0 auto; }
+  .view.on { display: block; }
+
+  .banner {
+    max-width: 1180px;
+    margin: 0 auto 18px;
+    padding: 12px 16px;
+    border-radius: var(--radius-ui);
+    border-left: 5px solid var(--amber);
+    background: var(--amber-soft);
+    display: none;
+  }
+  .banner.bad { border-left-color: var(--red); background: var(--red-soft); }
+  .banner.show { display: block; }
+
+  h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 20px;
+    margin: 0 0 4px;
+  }
+  .lead { color: var(--ink-soft); margin: 0 0 18px; }
+
+  /* ---------- Læserpladen ---------- */
+  .pad {
+    position: relative;
+    background: var(--petrol-deep);
+    border-radius: 22px;
+    padding: 28px;
+    min-height: 320px;
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .pad::before {
+    /* læserens felt: svage ringe fra midten */
+    content: "";
+    position: absolute;
+    inset: -40%;
+    background: repeating-radial-gradient(circle at 50% 50%, rgba(255,255,255,.045) 0 2px, transparent 2px 46px);
+    z-index: -1;
+  }
+  .pad.pulse::after {
+    content: "";
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 40px; height: 40px;
+    margin: -20px 0 0 -20px;
+    border-radius: 50%;
+    border: 2px solid rgba(242,193,78,.7);
+    animation: ring .9s ease-out forwards;
+    z-index: -1;
+  }
+  @keyframes ring { to { transform: scale(22); opacity: 0; } }
+
+  .labels {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 18px;
+  }
+  .label {
+    position: relative;
+    background: var(--label);
+    color: #1c2a2e;
+    border-radius: var(--radius-label);
+    padding: 16px 18px 14px 26px;
+    box-shadow: 0 1px 0 rgba(0,0,0,.25), 0 10px 24px -12px rgba(0,0,0,.6);
+    cursor: default;
+    text-align: left;
+    border: 0;
+    width: 100%;
+  }
+  .label.new { animation: drop .35s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes drop { from { transform: translateY(-10px) scale(.97); opacity: 0; } }
+  .label .strip {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 10px;
+    border-radius: var(--radius-label) 0 0 var(--radius-label);
+    background: #c9d3d5;
+  }
+  .label.alarm-on .strip { background: var(--amber); }
+  .label.alarm-off .strip { background: var(--green); }
+  .label .num {
+    font-family: var(--display);
+    font-size: 30px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    word-break: break-all;
+  }
+  .label .num.muted { color: #7b8a8e; font-weight: 400; font-size: 24px; }
+  .label .meta { display: flex; justify-content: space-between; gap: 12px; color: #5b6b70; margin-top: 6px; font-size: 14px; }
+  .label .alarm { margin-top: 12px; font-size: 13.5px; font-weight: 600; }
+  .label.alarm-on .alarm { color: #a96c00; }
+  .label.alarm-off .alarm { color: #1f7a49; }
+  .label .warn { margin-top: 6px; color: var(--red); font-size: 13px; }
+  button.label { cursor: pointer; }
+  button.label.sel { box-shadow: 0 0 0 3px var(--amber), 0 10px 24px -12px rgba(0,0,0,.6); }
+
+  .empty {
+    color: #d7e5e8;
+    text-align: center;
+    padding: 56px 16px 40px;
+  }
+  .empty strong { display: block; font-family: var(--display); font-weight: 600; font-size: 24px; color: #fff; margin-bottom: 6px; }
+  .padnote { color: #c4d6da; margin-top: 18px; font-size: 14px; }
+
+  /* ---------- Værktøj ---------- */
+  .tool { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  @media (max-width: 900px) { .tool { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--label);
+    color: #1c2a2e;
+    border-radius: 16px;
+    padding: 22px 24px;
+    border: 1px solid var(--line);
+  }
+  @media (prefers-color-scheme: dark) { .panel { border-color: transparent; } }
+  .panel h3 { font-family: var(--display); font-weight: 600; font-size: 18px; margin: 0 0 14px; }
+  .chip-pad { min-height: 0; padding: 18px 22px 22px; border-radius: 16px; margin-bottom: 18px; display: none; }
+  .chip-pad.show { display: block; }
+  .chipcard { position: relative; padding-left: 36px; overflow: hidden; }
+  .chipcard .strip { position: absolute; left: 0; top: 0; bottom: 0; width: 12px; background: #c9d3d5; }
+  .chipcard.alarm-on .strip { background: var(--amber); }
+  .chipcard.alarm-off .strip { background: var(--green); }
+  .chip-pad .labels { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 16px 0; }
+  .tile { background: #f1f5f5; border-radius: 8px; padding: 9px 12px; }
+  .tile small { display: block; color: #5b6b70; font-size: 12.5px; }
+  .tile b { font-weight: 600; }
+  .tile.warn b { color: var(--red); }
+  .tile.on b { color: #a96c00; }
+  .tile.off b { color: #1f7a49; }
+  .bignum {
+    font-family: var(--display);
+    font-size: 40px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .02em;
+    line-height: 1.05;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  .bignum.muted { color: #7b8a8e; font-weight: 400; font-size: 30px; }
+
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .btn {
+    border: 1px solid #c3d0d2;
+    background: #fff;
+    border-radius: 8px;
+    padding: 9px 16px;
+    cursor: pointer;
+    font-weight: 600;
+    color: #1c2a2e;
+  }
+  .btn:hover { border-color: #8fa7ab; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.primary { background: var(--petrol); border-color: var(--petrol); color: #fff; }
+  .btn.primary:hover { background: var(--petrol-deep); }
+  .btn.big { font-size: 17px; padding: 12px 22px; }
+  .btn.danger { color: var(--red); border-color: #e6bcbc; }
+  .btn.small { padding: 5px 11px; font-weight: 500; font-size: 13.5px; }
+  .btn.amber { border-color: #ecc77d; }
+  .btn.green { border-color: #a5d7bb; }
+
+  label.f { display: block; font-size: 13.5px; color: #5b6b70; margin: 0 0 6px; }
+  input.text {
+    width: 100%;
+    border: 2px solid #c3d0d2;
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: #fff;
+    color: #1c2a2e;
+  }
+  input.text:focus { border-color: var(--petrol); outline: none; }
+  input.barcode { font-family: var(--display); font-size: 26px; letter-spacing: .03em; font-variant-numeric: tabular-nums; }
+  .stepper { display: inline-flex; align-items: center; border: 2px solid #c3d0d2; border-radius: 8px; overflow: hidden; }
+  .stepper button { border: 0; background: #f1f5f5; width: 38px; height: 40px; cursor: pointer; font-size: 18px; color: #1c2a2e; }
+  .stepper span { min-width: 44px; text-align: center; font-family: var(--display); font-size: 19px; }
+
+  .armed {
+    margin-top: 16px;
+    border-radius: 12px;
+    padding: 16px 18px;
+    background: var(--petrol-soft);
+    color: var(--ink);
+    display: none;
+  }
+  @media (prefers-color-scheme: dark) { .armed { background: #e3eef0; color: #1c2a2e; } }
+  .armed.show { display: block; }
+  .armed.warn { background: #fcf0d8; color: #1c2a2e; }
+  .armed.err { background: #fbe6e6; color: #1c2a2e; }
+  .armed strong { display: block; font-family: var(--display); font-weight: 600; font-size: 20px; margin-bottom: 4px; }
+  .parts { display: flex; gap: 6px; margin: 10px 0 12px; }
+  .parts i { width: 26px; height: 8px; border-radius: 4px; background: #c3d0d2; }
+  .parts i.done { background: var(--green); }
+  .parts i.now { background: var(--amber); }
+  .libline { color: #5b6b70; font-size: 14px; margin-top: 10px; }
+  .libline a { color: var(--petrol); }
+
+  /* ---------- Indstillinger og fejlfinding ---------- */
+  .stack { display: grid; gap: 20px; max-width: 760px; }
+  .switch { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+  .switch input { width: 44px; height: 24px; appearance: none; background: #c3d0d2; border-radius: 12px; position: relative; cursor: pointer; flex: none; }
+  .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .switch input:checked { background: var(--green); }
+  .switch input:checked::after { left: 23px; }
+  dl.info { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 0; font-size: 14px; }
+  dl.info dt { color: #5b6b70; }
+  dl.info dd { margin: 0; word-break: break-all; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .hint { color: #5b6b70; font-size: 13.5px; margin-top: 8px; }
+
+  .log {
+    background: var(--petrol-deep);
+    color: #d9e7ea;
+    border-radius: 12px;
+    padding: 12px 14px;
+    height: 46vh;
+    overflow: auto;
+    font: 12.5px/1.5 "Cascadia Mono", Consolas, monospace;
+    white-space: pre;
+  }
+  .log .w { color: #f2c14e; }
+  .log .e { color: #ff9c9c; }
+  .log .c { color: #9fe0bd; }
+
+  /* ---------- Beskeder ---------- */
+  #toast {
+    position: fixed; left: 50%; bottom: 26px;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--ink); color: var(--paper);
+    padding: 11px 18px; border-radius: 10px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .2s, transform .2s;
+    max-width: 90vw;
+    font-weight: 600;
+  }
+  @media (prefers-color-scheme: dark) { #toast { background: #f7faf9; color: #1c2a2e; } }
+  #toast.show { opacity: 1; transform: translateX(-50%); }
+  #toast.bad { background: var(--red); color: #fff; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(10,25,30,.55); display: none; align-items: center; justify-content: center; padding: 20px; }
+  .modal-bg.show { display: flex; }
+  .modal { background: #fff; color: #1c2a2e; border-radius: 14px; padding: 22px 24px; max-width: 460px; width: 100%; box-shadow: 0 20px 50px -20px rgba(0,0,0,.6); }
+  .modal h3 { font-family: var(--display); font-weight: 600; font-size: 20px; margin: 0 0 8px; }
+  .modal p { margin: 0 0 18px; color: #3c4c50; }
+  .modal .row { justify-content: flex-end; }
+  #lost { position: fixed; inset: 0; background: rgba(18,51,61,.92); color: #fff; display: none; align-items: center; justify-content: center; text-align: center; padding: 30px; }
+  #lost.show { display: flex; }
+  #lost strong { font-family: var(--display); font-size: 26px; display: block; margin-bottom: 8px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .label.new, .pad.pulse::after { animation: none; }
+    #toast, .switch input::after { transition: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
+      <rect x="3" y="7" width="20" height="24" rx="2" fill="#fff"/>
+      <rect x="3" y="7" width="5" height="24" rx="1.5" fill="#e39b1c"/>
+      <path d="M24 9a10 10 0 0 1 0 14M27.5 5.5a15 15 0 0 1 0 21" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+    </svg>
+    <h1>RFIDlibra</h1>
+  </div>
+  <div class="status" aria-live="polite">
+    <span><i class="dot" id="dotReader"></i><span id="txtReader">Læseren …</span></span>
+    <span><i class="dot" id="dotCicero"></i><span id="txtCicero">Cicero …</span></span>
+  </div>
+</header>
+<nav>
+  <a href="#" data-v="laeser">På læseren</a>
+  <a href="#vaerktoej" data-v="vaerktoej">Værktøj til tags</a>
+  <a href="#indstillinger" data-v="indstillinger">Indstillinger</a>
+  <a href="#fejlfinding" data-v="fejlfinding">Fejlfinding</a>
+</nav>
+<main>
+  <div class="banner" id="bnStaff">staffConnect link kører på denne pc og kan tage læseren fra RFIDlibra. Slå den fra, så RFIDlibra har læseren for sig selv.</div>
+  <div class="banner bad" id="bnPort"></div>
+  <div class="banner" id="bnLib">Biblioteksnummeret til nye chips er ikke sat. <a href="#indstillinger">Sæt det under Indstillinger</a>.</div>
+
+  <!-- På læseren -->
+  <section class="view" id="v-laeser">
+    <div class="pad" id="pad">
+      <div class="labels" id="labels"></div>
+      <div class="empty" id="padEmpty"><strong>Læg en bog på læseren</strong>Bøgerne vises her, så snart læseren har læst dem.</div>
+      <div class="padnote" id="padNote"></div>
+    </div>
+  </section>
+
+  <!-- Værktøj -->
+  <section class="view" id="v-vaerktoej">
+    <div class="tool">
+      <div>
+        <div class="pad chip-pad" id="chipPad">
+          <p class="padnote" style="margin:0 0 14px">Der ligger flere chips på læseren. Vælg den, du vil arbejde med.</p>
+          <div class="labels" id="chipLabels"></div>
+        </div>
+        <div class="panel chipcard" id="chipInfo">
+          <span class="strip" id="chipStrip"></span>
+          <div class="bignum" id="chipTitle"></div>
+          <div class="tiles" id="chipTiles"></div>
+          <div class="row">
+            <button class="btn amber" id="bAlarmOn">Alarm til</button>
+            <button class="btn green" id="bAlarmOff">Alarm fra</button>
+            <button class="btn" id="bCopy">Kopiér nummer</button>
+            <span style="flex:1"></span>
+            <button class="btn danger" id="bReset">Nulstil chip</button>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Programmér chip</h3>
+        <label class="f" for="inBarcode">Materialenummer</label>
+        <input class="text barcode" id="inBarcode" autocomplete="off" spellcheck="false" maxlength="16" placeholder="Scan eller skriv">
+        <div class="row" style="margin-top:14px">
+          <div>
+            <label class="f">Antal dele</label>
+            <div class="stepper"><button id="numMinus" aria-label="Færre dele">−</button><span id="numVal">1</span><button id="numPlus" aria-label="Flere dele">+</button></div>
+          </div>
+          <span style="flex:1"></span>
+          <button class="btn primary big" id="bProgram" style="align-self:flex-end">Programmér</button>
+        </div>
+        <div class="libline" id="libLine"></div>
+        <div class="armed" id="armed">
+          <strong id="armedTitle"></strong>
+          <div class="parts" id="armedParts"></div>
+          <div id="armedText"></div>
+          <div class="row" style="margin-top:12px"><button class="btn small" id="bCancel">Annullér</button><button class="btn small" id="bRetry" style="display:none">Prøv igen</button></div>
+        </div>
+        <p class="hint">Når chippen er programmeret, slås alarmen til. Har den allerede indhold, bliver du spurgt, før den overskrives.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Indstillinger -->
+  <section class="view" id="v-indstillinger">
+    <div class="stack">
+      <div class="panel">
+        <h3>Biblioteksnummer til nye chips</h3>
+        <div class="row">
+          <input class="text" id="inLib" style="max-width:200px" maxlength="9" spellcheck="false" placeholder="fx 715900">
+          <button class="btn primary" id="bLib">Gem</button>
+        </div>
+        <div class="chips" id="libChips"></div>
+        <p class="hint">Bruges, når en tom chip programmeres. Chips, der allerede har et biblioteksnummer, beholder det.</p>
+      </div>
+      <div class="panel">
+        <h3>Start</h3>
+        <label class="switch"><input type="checkbox" id="swAuto"> Start RFIDlibra, når jeg logger på Windows</label>
+        <p class="hint">Programmet ligger så i baggrunden med et ikon ved uret. Klik på ikonet for at åbne dette vindue.</p>
+      </div>
+      <div class="panel">
+        <h3>Om</h3>
+        <dl class="info">
+          <dt>Version</dt><dd id="iVersion"></dd>
+          <dt>Læser</dt><dd id="iReader"></dd>
+          <dt>FEIG-fil</dt><dd id="iFeusb"></dd>
+          <dt>Cicero</dt><dd>Vælg leverandøren Deichman, adresse localhost og port 1667 i Ciceros enhedsindstillinger.</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <!-- Fejlfinding -->
+  <section class="view" id="v-fejlfinding">
+    <div class="row" style="margin-bottom:14px">
+      <button class="btn" id="bSelf">Kør selvtest</button>
+      <button class="btn" id="bReconnect">Forbind til læseren igen</button>
+      <button class="btn" id="bCopyLog">Kopiér log</button>
+      <a class="btn" id="bSaveLog" href="#" download style="text-decoration:none">Gem log</a>
+      <span style="flex:1"></span>
+      <label class="switch"><input type="checkbox" id="swRaw"> Rå data i loggen</label>
+    </div>
+    <p class="hint" id="stats" style="margin:0 0 10px"></p>
+    <div class="log" id="log" tabindex="0" aria-label="Log"></div>
+    <p class="hint">Selvtesten kræver en bog på læseren og tager omkring 10 sekunder. Imens kan Cicero ikke bruge læseren.</p>
+  </section>
+</main>
+
+<div id="toast" role="status"></div>
+<div class="modal-bg" id="modalBg">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+    <h3 id="mTitle"></h3>
+    <p id="mText"></p>
+    <div id="mExtra"></div>
+    <div class="row"><button class="btn" id="mNo">Annullér</button><button class="btn primary" id="mYes"></button></div>
+  </div>
+</div>
+<div id="lost"><div><strong>RFIDlibra kører ikke</strong>Start programmet igen fra Start-menuen. Vinduet finder selv forbindelsen, når det kører.</div></div>
+
+<script>
+"use strict";
+const T = new URLSearchParams(location.search).get("t") || "";
+const $ = id => document.getElementById(id);
+let S = null;              // seneste tilstand
+let lastTagsKey = "";
+let seenMacs = new Set();
+let sel = null;            // valgt chip i værktøjet
+let armed = null;          // programmering i gang
+let numParts = 1;
+let logNext = 0;
+
+function api(path, params, method) {
+  const q = new URLSearchParams(Object.assign({ t: T }, params || {}));
+  return fetch("/app/api/" + path + "?" + q, { method: method || "GET", cache: "no-store" }).then(r => r.json());
+}
+const post = (path, params) => api(path, params, "POST");
+
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+let toastTimer;
+function toast(msg, bad) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "show" + (bad ? " bad" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = "", bad ? 5000 : 2600);
+}
+
+function modal(title, text, yes, opts) {
+  opts = opts || {};
+  return new Promise(res => {
+    $("mTitle").textContent = title;
+    $("mText").textContent = text;
+    $("mExtra").innerHTML = opts.extra || "";
+    $("mYes").textContent = yes;
+    $("mYes").className = "btn " + (opts.danger ? "danger" : "primary");
+    $("modalBg").classList.add("show");
+    const done = v => { $("modalBg").classList.remove("show"); $("mYes").onclick = $("mNo").onclick = null; res(v); };
+    $("mYes").onclick = () => done(true);
+    $("mNo").onclick = () => done(false);
+    setTimeout(() => (opts.focus ? $(opts.focus) : $("mNo")).focus(), 30);
+  });
+}
+
+// ---------- Faner ----------
+function showView() {
+  const v = (location.hash || "#laeser").slice(1) || "laeser";
+  document.querySelectorAll(".view").forEach(e => e.classList.toggle("on", e.id === "v-" + v));
+  document.querySelectorAll("nav a").forEach(a => a.classList.toggle("on", a.dataset.v === v));
+  if (v === "vaerktoej") setTimeout(() => $("inBarcode").focus(), 30);
+  if (v === "fejlfinding") pollLog();
+}
+window.addEventListener("hashchange", showView);
+
+// ---------- Etiketter ----------
+function alarmClass(t) { return t.alarm === "on" ? "alarm-on" : t.alarm === "off" ? "alarm-off" : ""; }
+function alarmText(t) {
+  return t.alarm === "on" ? "Alarm til" : t.alarm === "off" ? "Alarm fra" : t.alarm === "unknown" ? "Alarm ukendt" : "Alarm " + t.alarm;
+}
+function title(t) {
+  if (t.kind === "unread") return { text: "Læser …", muted: true };
+  if (t.kind === "blank") return { text: "Tom chip", muted: true };
+  if (t.kind === "unknown") return { text: "Ukendt indhold", muted: true };
+  return t.barcode ? { text: t.barcode, muted: false } : { text: "Intet nummer", muted: true };
+}
+function labelHtml(t, tag, isNew, selected) {
+  const ti = title(t);
+  const part = t.kind === "danish" ? (t.num > 1 ? "Del " + t.seq + " af " + t.num : "Ét bind") : t.maker;
+  const lib = t.kind === "danish" && t.library ? t.country + "-" + t.library : "";
+  const warn = t.kind === "danish" && !t.crcOk ? '<div class="warn">Kontrolsummen passer ikke</div>' : "";
+  return "<" + tag + ' class="label ' + alarmClass(t) + (isNew ? " new" : "") + (selected ? " sel" : "") + '" data-mac="' + esc(t.mac) + '">' +
+    '<span class="strip"></span>' +
+    '<div class="num' + (ti.muted ? " muted" : "") + '">' + esc(ti.text) + "</div>" +
+    '<div class="meta"><span>' + esc(part) + "</span><span>" + esc(lib) + "</span></div>" +
+    (t.kind === "unread" ? "" : '<div class="alarm">' + esc(alarmText(t)) + "</div>") + warn +
+    "</" + tag + ">";
+}
+
+function renderReader() {
+  const tags = S.tags;
+  const fresh = tags.filter(t => !seenMacs.has(t.mac));
+  $("labels").innerHTML = tags.map(t => labelHtml(t, "div", fresh.includes(t), false)).join("");
+  $("padEmpty").style.display = tags.length ? "none" : "block";
+  if (!S.reader.ok) {
+    $("padEmpty").innerHTML = "<strong>Ingen forbindelse til læseren</strong>" + esc(S.reader.text);
+    $("padEmpty").style.display = "block";
+  } else if (!tags.length) {
+    $("padEmpty").innerHTML = "<strong>Læg en bog på læseren</strong>Bøgerne vises her, så snart læseren har læst dem.";
+  }
+  $("padNote").textContent = tags.length && !S.cicero.listening ? "Cicero lytter ikke lige nu. Slå RFID til i Cicero for at bruge bøgerne der." : "";
+  if (fresh.length) {
+    const pad = $("pad");
+    pad.classList.remove("pulse"); void pad.offsetWidth; pad.classList.add("pulse");
+  }
+  tags.forEach(t => seenMacs.add(t.mac));
+  if (!tags.length) seenMacs.clear();
+}
+
+// ---------- Værktøj ----------
+function readyTags() { return S ? S.tags.filter(t => t.kind !== "unread") : []; }
+function selected() {
+  const ready = readyTags();
+  if (ready.length === 1) return ready[0];
+  return ready.find(t => t.mac === sel) || null;
+}
+
+function tile(name, value, cls) { return '<div class="tile ' + (cls || "") + '"><small>' + esc(name) + "</small><b>" + esc(value) + "</b></div>"; }
+
+function renderTool() {
+  const all = S.tags;
+  const ready = readyTags();
+  const many = all.length > 1;
+  $("chipPad").classList.toggle("show", many);
+  $("chipLabels").innerHTML = many ? all.map(t => labelHtml(t, t.kind !== "unread" ? "button" : "div", false, t.mac === sel)).join("") : "";
+  const t = selected();
+  $("chipInfo").className = "panel chipcard " + (t ? alarmClass(t) : "");
+  const has = !!t;
+  ["bAlarmOn", "bAlarmOff", "bReset"].forEach(id => $(id).disabled = !has || !!armed);
+  $("bCopy").disabled = !(has && t.kind === "danish" && t.barcode);
+  if (!has) {
+    $("chipTitle").className = "bignum muted";
+    $("chipTitle").textContent = ready.length > 1 ? "Vælg en chip ovenfor" : all.length ? "Læser chippen …" : "Læg en chip på læseren";
+    $("chipTiles").innerHTML = tile("Del", "–") + tile("Bibliotek på chip", "–") + tile("Alarm", "–") + tile("Chip", "–");
+  } else {
+    const ti = title(t);
+    $("chipTitle").className = "bignum" + (ti.muted ? " muted" : "");
+    $("chipTitle").textContent = ti.text;
+    const danish = t.kind === "danish";
+    const del = !danish ? ["–", ""] : (t.seq >= 1 && t.seq <= t.num ? [t.seq + " af " + t.num, ""] : ["uklart (" + t.seq + "/" + t.num + ")", "warn"]);
+    const own = S.settings.library;
+    const lib = t.kind === "blank" ? ["–", ""] : !danish ? ["ikke dansk format", "warn"] : !t.library ? ["ikke angivet", "warn"]
+      : [t.country + "-" + t.library, own && t.library !== own ? "warn" : ""];
+    const al = t.alarm === "on" ? ["Til", "on"] : t.alarm === "off" ? ["Fra", "off"] : t.alarm === "unknown" ? ["ukendt", "warn"] : ["anden (" + t.alarm + ")", "warn"];
+    $("chipTiles").innerHTML = tile("Del", del[0], del[1]) + tile("Bibliotek på chip", lib[0], lib[1]) + tile("Alarm", al[0], al[1]) + tile("Chip", t.maker);
+  }
+  const lib = S.settings.library;
+  $("libLine").innerHTML = lib ? "Nye chips får biblioteksnummer DK-" + esc(lib) + ' (<a href="#indstillinger">skift</a>)' : 'Biblioteksnummeret er ikke sat. <a href="#indstillinger">Sæt det under Indstillinger</a>.';
+  stepArmed();
+}
+
+document.addEventListener("click", e => {
+  const b = e.target.closest("button.label");
+  if (b && b.closest("#chipLabels")) { sel = b.dataset.mac; renderTool(); }
+});
+
+async function toolCall(path, params, okToast) {
+  const r = await post(path, params).catch(() => ({ ok: false, message: "RFIDlibra svarede ikke" }));
+  toast(r.message || (r.ok ? okToast : "Det lykkedes ikke"), !r.ok);
+  return r;
+}
+$("bAlarmOn").onclick = () => { const t = selected(); if (t) toolCall("tool/alarm", { mac: t.mac, on: 1 }); };
+$("bAlarmOff").onclick = () => { const t = selected(); if (t) toolCall("tool/alarm", { mac: t.mac, on: 0 }); };
+$("bCopy").onclick = () => {
+  const t = selected();
+  if (t && t.barcode) navigator.clipboard.writeText(t.barcode).then(() => toast("Kopieret " + t.barcode), () => toast("Kunne ikke kopiere", true));
+};
+$("bReset").onclick = async () => {
+  const t = selected();
+  if (!t) return;
+  const what = t.kind === "danish" && t.barcode ? "materialenummer " + t.barcode : t.kind === "blank" ? "en tom chip" : "ukendt indhold";
+  if (await modal("Nulstil chippen?", "Chippen har " + what + ". Alt på den slettes, og alarmen nulstilles, så den er som en ny. Det kan ikke fortrydes.", "Nulstil", { danger: true }))
+    toolCall("tool/reset", { mac: t.mac });
+};
+
+function setNum(n) { numParts = Math.max(1, Math.min(99, n)); $("numVal").textContent = numParts; }
+$("numMinus").onclick = () => setNum(numParts - 1);
+$("numPlus").onclick = () => setNum(numParts + 1);
+$("inBarcode").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); arm(); } });
+$("bProgram").onclick = () => arm();
+$("bCancel").onclick = () => disarm("Programmering annulleret");
+$("bRetry").onclick = () => { if (armed) { armed.errorMac = null; armed.error = null; stepArmed(); } };
+
+async function askLibrary() {
+  const sug = [...new Set(S.tags.filter(t => t.kind === "danish" && t.library).map(t => t.library))];
+  const extra = '<input class="text" id="mLib" maxlength="9" spellcheck="false" placeholder="fx 715900" value="' + esc(sug[0] || "") + '" style="margin-bottom:16px">';
+  const ok = await modal("Hvilket biblioteksnummer?", "Nye chips får bibliotekets nummer (ISIL uden DK-). Det huskes til næste gang.", "Gem", { extra, focus: "mLib" });
+  if (!ok) return false;
+  const v = ($("mLib").value || "").trim();
+  if (!v) return false;
+  await post("settings", { library: v });
+  S.settings.library = v;
+  return true;
+}
+
+async function arm() {
+  const bc = $("inBarcode").value.trim();
+  if (!bc || bc.length > 16 || /[^\x21-\x7e]/.test(bc)) { toast("Skriv et materialenummer (højst 16 tegn, uden mellemrum)", true); $("inBarcode").focus(); return; }
+  if (!S.settings.library && !(await askLibrary())) return;
+  armed = { barcode: bc, num: numParts, part: 1, lastMac: null, busy: false, errorMac: null, error: null };
+  $("bProgram").disabled = true;
+  stepArmed();
+}
+
+function disarm(msg) {
+  armed = null;
+  $("armed").className = "armed";
+  $("bProgram").disabled = false;
+  if (msg) toast(msg);
+}
+
+function showArmed(cls, title, text) {
+  const a = $("armed");
+  a.className = "armed show " + (cls || "");
+  $("armedTitle").textContent = title;
+  $("armedText").textContent = text || "";
+  let p = "";
+  if (armed.num > 1) for (let i = 1; i <= armed.num; i++) p += "<i class='" + (i < armed.part ? "done" : i === armed.part ? "now" : "") + "'></i>";
+  $("armedParts").innerHTML = p;
+  $("armedParts").style.display = armed.num > 1 ? "flex" : "none";
+  $("bRetry").style.display = cls === "err" ? "inline-block" : "none";
+}
+
+function stepArmed() {
+  if (!armed || !S) return;
+  const what = armed.num > 1 ? "del " + armed.part + " af " + armed.num : "chippen";
+  if (!S.reader.ok) { showArmed("err", "Ingen forbindelse til læseren", S.reader.text); return; }
+  if (armed.busy) { showArmed("", "Programmerer " + what + " …", armed.barcode); return; }
+  const ready = readyTags();
+  const reading = S.tags.length > ready.length;
+  if (armed.error && ready.some(t => t.mac === armed.errorMac)) { showArmed("err", "Det lykkedes ikke", armed.error); return; }
+  armed.error = null;
+  if (ready.length === 0) {
+    showArmed("", reading ? "Læser chippen …" : "Læg " + what + " på læseren", "Materialenummer " + armed.barcode);
+    return;
+  }
+  if (ready.length > 1) { showArmed("warn", "Der ligger " + ready.length + " chips på læseren", "Læg kun én chip på ad gangen."); return; }
+  const t = ready[0];
+  if (t.mac === armed.lastMac) { showArmed("", "Tag del " + (armed.part - 1) + " af", "Læg derefter del " + armed.part + " af " + armed.num + " på læseren."); return; }
+  program(t, false);
+}
+
+async function program(t, confirmed) {
+  armed.busy = true;
+  stepArmed();
+  const a = armed;
+  const r = await post("tool/program", { mac: t.mac, barcode: a.barcode, seq: a.part, num: a.num, library: S.settings.library, confirmed: confirmed ? 1 : 0 })
+    .catch(() => ({ ok: false, message: "RFIDlibra svarede ikke" }));
+  if (armed !== a) return;
+  a.busy = false;
+  if (r.needsConfirm) {
+    const yes = await modal("Overskriv chippen?", "Chippen har allerede " + r.message + ". Vil du overskrive den med " + a.barcode + (a.num > 1 ? " (del " + a.part + " af " + a.num + ")" : "") + "?", "Overskriv");
+    if (armed !== a) return;
+    if (yes) return program(t, true);
+    return disarm("Ikke overskrevet");
+  }
+  if (!r.ok) { a.error = r.message; a.errorMac = t.mac; stepArmed(); return; }
+  a.lastMac = t.mac;
+  if (a.part < a.num) {
+    toast("Del " + a.part + " af " + a.num + " programmeret ✓");
+    a.part++;
+    stepArmed();
+  } else {
+    toast(a.num > 1 ? "Alle " + a.num + " dele programmeret ✓" : "Programmeret ✓");
+    disarm();
+    $("inBarcode").value = "";
+    setNum(1);
+    $("inBarcode").focus();
+  }
+}
+
+// ---------- Indstillinger ----------
+$("bLib").onclick = async () => {
+  const v = $("inLib").value.trim();
+  await post("settings", { library: v });
+  toast(v ? "Biblioteksnummer gemt" : "Biblioteksnummer fjernet");
+};
+$("swAuto").onchange = async e => {
+  const r = await post("settings", { autostart: e.target.checked ? 1 : 0 });
+  toast(r.message, !r.ok || /lykkedes ikke/.test(r.message));
+};
+
+// ---------- Fejlfinding ----------
+$("bSelf").onclick = () => post("selftest").then(r => toast(r.message));
+$("bReconnect").onclick = () => post("reconnect").then(r => toast(r.message));
+$("swRaw").onchange = e => post("raw", { on: e.target.checked ? 1 : 0 });
+$("bCopyLog").onclick = () => fetch("/app/api/log.txt?t=" + T).then(r => r.text()).then(x => navigator.clipboard.writeText(x)).then(() => toast("Loggen er kopieret"), () => toast("Kunne ikke kopiere", true));
+$("bSaveLog").href = "/app/api/log.txt?t=" + T;
+
+function logClass(l) {
+  if (/FEJL|opgivet|ADVARSEL|Afvist/.test(l)) return "e";
+  if (/tabt svar|USB-FEJL|reddet|genåbnet/.test(l)) return "w";
+  if (/Cicero/.test(l)) return "c";
+  return "";
+}
+let logBusy = false;
+async function pollLog() {
+  if (logBusy || !$("v-fejlfinding").classList.contains("on")) return;
+  logBusy = true;
+  try {
+    const r = await api("log", { since: logNext });
+    const box = $("log");
+    const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    if (r.lines.length) {
+      const frag = document.createDocumentFragment();
+      r.lines.forEach(l => { const d = document.createElement("div"); d.textContent = l; const c = logClass(l); if (c) d.className = c; frag.appendChild(d); });
+      box.appendChild(frag);
+      while (box.childNodes.length > 3000) box.removeChild(box.firstChild);
+      if (atEnd) box.scrollTop = box.scrollHeight;
+    }
+    logNext = r.next;
+  } catch (e) { }
+  logBusy = false;
+}
+setInterval(pollLog, 1000);
+
+// ---------- Tilstand ----------
+function renderTop() {
+  const r = S.reader, c = S.cicero;
+  $("dotReader").className = "dot " + (r.ok ? "ok" : "bad");
+  $("txtReader").textContent = r.ok ? "Læseren er klar" : "Ingen læser";
+  $("dotCicero").className = "dot " + (c.error ? "bad" : c.listening ? "ok" : "wait");
+  $("txtCicero").textContent = c.error ? "Cicero kan ikke forbinde" : c.listening ? "Cicero lytter" : "Cicero lytter ikke";
+  $("bnStaff").classList.toggle("show", S.staffConnect);
+  $("bnPort").classList.toggle("show", !!c.error);
+  $("bnPort").textContent = c.error ? c.error + ". Cicero kan ikke forbinde, før det andet program er lukket." : "";
+  $("bnLib").classList.toggle("show", !S.settings.library && location.hash === "#vaerktoej");
+  $("iVersion").textContent = S.version;
+  $("iReader").textContent = r.name || r.text;
+  $("iFeusb").textContent = r.feusb || "ikke fundet";
+  $("stats").textContent = r.stats ? "Siden start: " + r.stats : "";
+  if (document.activeElement !== $("inLib")) $("inLib").value = S.settings.library;
+  $("swAuto").checked = S.settings.autostart;
+  $("swRaw").checked = S.settings.logRaw;
+  const libs = [...new Set(S.tags.filter(t => t.kind === "danish" && t.library).map(t => t.library))].filter(l => l !== S.settings.library);
+  $("libChips").innerHTML = libs.map(l => '<button class="btn small" data-lib="' + esc(l) + '">Brug DK-' + esc(l) + " fra chippen på læseren</button>").join("");
+}
+$("libChips").addEventListener("click", e => { const b = e.target.closest("[data-lib]"); if (b) { $("inLib").value = b.dataset.lib; $("bLib").click(); } });
+
+let failures = 0;
+async function poll() {
+  try {
+    S = await api("state");
+    failures = 0;
+    $("lost").classList.remove("show");
+    renderTop();
+    const key = JSON.stringify(S.tags) + S.reader.ok + S.cicero.listening;
+    if (key !== lastTagsKey) { lastTagsKey = key; renderReader(); renderTool(); }
+    else stepArmed();
+  } catch (e) {
+    if (++failures >= 3) $("lost").classList.add("show");
+  }
+  setTimeout(poll, failures ? 2000 : 400);
+}
+
+showView();
+poll();
+</script>
+</body>
+</html>

@@ -59,6 +59,9 @@ namespace RFIDlibra
         private volatile bool running;
 
         public string BindError { get; private set; }
+
+        /// <summary>Brugerfladen under /app (sat af programmet).</summary>
+        public UiServer Ui;
         public event Action ClientsChanged;
 
         public CiceroServer(Log log, IHub hub)
@@ -160,7 +163,7 @@ namespace RFIDlibra
             }
         }
 
-        private sealed class Request
+        public sealed class Request
         {
             public string Method;
             public string Path;
@@ -183,6 +186,15 @@ namespace RFIDlibra
                 string host;
                 req.Headers.TryGetValue("Host", out host);
                 host = HostOnly(host ?? "");
+
+                // Brugerfladen: kun til localhost (mod DNS-tricks); adgangen til dens funktioner styres af en hemmelig nøgle
+                if ((req.Path == "/app" || req.Path.StartsWith("/app/")) && Ui != null)
+                {
+                    if (!LocalHosts.Contains(host)) { Respond(ns, 403, "text/plain", "Forbidden", null, null); tcp.Close(); return; }
+                    Ui.Handle(req, ns);
+                    tcp.Close();
+                    return;
+                }
 
                 if (origin == null || !AllowedOrigins.Contains(origin) || !LocalHosts.Contains(host))
                 {
@@ -328,7 +340,7 @@ namespace RFIDlibra
             yield return "Vary: Origin";
         }
 
-        private static void Respond(Stream outp, int code, string type, string body, string origin, IEnumerable<string> extra)
+        public static void Respond(Stream outp, int code, string type, string body, string origin, IEnumerable<string> extra)
         {
             byte[] b = Encoding.UTF8.GetBytes(body ?? "");
             string reason;

@@ -54,6 +54,13 @@ namespace RFIDlibra
         public event Action<string> Status;
         public event Action<List<TagView>> TagsChanged;
 
+        /// <summary>Øjebliksbillede til brugerfladen (sat på arbejdstråden, læst fra serveren).</summary>
+        public volatile string TagsJson = "[]";
+        public volatile bool ReaderOk;
+        public volatile string ReaderText = "Starter ...";
+        public volatile string StatsText = "";
+        public volatile string ReaderName = "";
+
         public volatile bool LogRaw = false;
 
         /// <summary>Serveren, som tags meldes til (sat af vinduet).</summary>
@@ -96,12 +103,18 @@ namespace RFIDlibra
 
         private void SetStatus(string s)
         {
+            ReaderText = s;
+            ReaderOk = reader != null && reader.IsOpen;
             Action<string> h = Status;
             if (h != null) h(s);
         }
 
         private void Publish()
         {
+            StringBuilder sb = new StringBuilder("[");
+            foreach (TagState t in tags.Values) { if (sb.Length > 1) sb.Append(','); sb.Append(t.ToUiJson("")); }
+            foreach (TagState t in pending.Values) { if (sb.Length > 1) sb.Append(','); sb.Append(t.ToUiJson("kunne ikke læses endnu")); }
+            TagsJson = sb.Append(']').ToString();
             Action<List<TagView>> h = TagsChanged;
             if (h == null) return;
             List<TagView> list = new List<TagView>();
@@ -149,12 +162,13 @@ namespace RFIDlibra
                         SetStatus("Leder efter læser ...");
                         if (!reader.Open())
                         {
-                            SetStatus("Ingen læser - prøver igen om lidt");
+                            SetStatus("Ingen læser fundet - sæt den i USB");
                             RunJobs(3000);
                             continue;
                         }
-                        baseStatus = "Læser: " + reader.DeviceName + ", firmware " + reader.Firmware;
-                        SetStatus(baseStatus);
+                        baseStatus = reader.DeviceName + ", firmware " + reader.Firmware;
+                        ReaderName = baseStatus;
+                        SetStatus("Læseren er klar");
                         foreach (TagState t in tags.Values) Broadcast("removeTag", t);
                         tags.Clear();
                         pending.Clear();
@@ -167,7 +181,7 @@ namespace RFIDlibra
                     if ((DateTime.Now - lastStats).TotalSeconds >= 2)
                     {
                         lastStats = DateTime.Now;
-                        SetStatus(baseStatus + "  |  " + reader.Stats);
+                        StatsText = reader.Stats;
                     }
 
                     if (selfTestRequested)
@@ -187,6 +201,7 @@ namespace RFIDlibra
             {
                 reader.Close();
                 running = false;
+                SetStatus("Stoppet");
                 Action a;
                 while (jobs.TryTake(out a)) try { a(); } catch { }
             }
@@ -279,6 +294,7 @@ namespace RFIDlibra
             if (data == null) { Count("ReadTagFail"); return false; }
             Count("ReadTagSucc");
             if (LogRaw) log.Write("Tag " + t.Mac + ": 32 bytes = " + Protocol.Hex(data));
+            t.Raw = data;
             t.Content = TagContent.Parse(data);
             if (t.Content != null && t.Content.Library.Length > 0) lastLibrary = t.Content.Library;
             return t.Content != null;
@@ -327,7 +343,7 @@ namespace RFIDlibra
                 sb.Append(",\"Reader\":{\"StrHandle\":null,\"PortHandle\":0,\"ReaderHandle\":0");
                 sb.Append(",\"Serial\":").Append(Json.Str(reader.DeviceId ?? ""));
                 sb.Append(",\"IntSerial\":").Append(serial);
-                sb.Append(",\"Name\":").Append(Json.Str((reader.DeviceName ?? "FEIG") + " (RFIDlibra " + MainForm.Version + ")"));
+                sb.Append(",\"Name\":").Append(Json.Str((reader.DeviceName ?? "FEIG") + " (RFIDlibra " + AppInfo.Version + ")"));
                 sb.Append(",\"Family\":").Append(Json.Str(reader.Family ?? ""));
                 lock (counters) foreach (KeyValuePair<string, long> kv in counters) sb.Append(',').Append(Json.Str(kv.Key)).Append(':').Append(kv.Value);
                 sb.Append("},\"LastInventory\":").Append(TagState.InventoryJson(tags.Values));
@@ -433,6 +449,7 @@ namespace RFIDlibra
                 return err;
             }
             Count("WriteTagSucc");
+            t.Raw = data;
             t.Content = TagContent.Parse(data);
             return null;
         }
@@ -453,6 +470,124 @@ namespace RFIDlibra
                     log.Write("Cicero lytter nu - sendt det, der allerede lå på læseren: " + string.Join(", ", tags.Values.Select(x => x.Label)));
                 });
             });
+        }
+
+        // ---------- Værktøj til tags (fra brugerfladen) ----------
+
+        public sealed class ToolResult
+        {
+            public bool Ok;
+            public bool NeedsConfirm;
+            public string Message;
+            public static ToolResult Good(string m) { return new ToolResult { Ok = true, Message = m }; }
+            public static ToolResult Bad(string m) { return new ToolResult { Ok = false, Message = m }; }
+        }
+
+        private TagState Find(string mac)
+        {
+            TagState t;
+            if (mac != null && tags.TryGetValue(mac.ToUpperInvariant(), out t)) return t;
+            return null;
+        }
+
+        /// <summary>Indholdet er ændret af værktøjet: Cicero skal se det nye (som når et tag fjernes og lægges på igen).</summary>
+        private void Changed(TagState t, string oldJson)
+        {
+            CiceroServer srv = Server;
+            if (srv != null && srv.ClientCount > 0)
+            {
+                srv.Broadcast("removeTag", oldJson);
+                srv.Broadcast("addTag", t.ToJson());
+            }
+            Publish();
+        }
+
+        public ToolResult ToolAlarm(string mac, bool on)
+        {
+            return OnWorker(() =>
+            {
+                TagState t = Find(mac);
+                if (t == null) return ToolResult.Bad("Tagget ligger ikke på læseren længere");
+                string err;
+                if (!reader.WriteAfi(t.Uid, on ? TagState.AFI_ON : TagState.AFI_OFF, out err))
+                {
+                    Count("WriteAFIFail");
+                    Publish();
+                    return ToolResult.Bad("Alarmen kunne ikke ændres: " + err);
+                }
+                Count("WriteAFISucc");
+                t.Afi = on ? TagState.AFI_ON : TagState.AFI_OFF;
+                log.Write("Værktøj: alarm " + (on ? "TIL" : "FRA") + " på " + t.Label);
+                Publish();
+                return ToolResult.Good(on ? "Alarm til ✓" : "Alarm fra ✓");
+            });
+        }
+
+        public ToolResult ToolReset(string mac)
+        {
+            return OnWorker(() =>
+            {
+                TagState t = Find(mac);
+                if (t == null) return ToolResult.Bad("Tagget ligger ikke på læseren længere");
+                string old = t.ToJson(), name = t.Label, err;
+                byte[] zero = new byte[32];
+                if (!reader.WriteDanish(t.Uid, zero, out err))
+                {
+                    Count("WriteTagFail");
+                    return ToolResult.Bad("Chippen kunne ikke nulstilles: " + err);
+                }
+                Count("WriteTagSucc");
+                t.Raw = zero;
+                t.Content = TagContent.Parse(zero);
+                if (!reader.WriteAfi(t.Uid, 0x00, out err))
+                {
+                    Changed(t, old);
+                    return ToolResult.Bad("Indholdet er slettet, men alarmen kunne ikke nulstilles: " + err);
+                }
+                t.Afi = 0x00;
+                log.Write("Værktøj: nulstillet tag (var " + name + ")");
+                Changed(t, old);
+                return ToolResult.Good("Nulstillet ✓ - chippen er tom");
+            });
+        }
+
+        /// <summary>Programmerer en chip og slår alarmen til (som NFClibra). Kræver bekræftelse, hvis chippen har andet indhold.</summary>
+        public ToolResult ToolProgram(string mac, string barcode, int seq, int num, string library, bool confirmed)
+        {
+            return OnWorker(() =>
+            {
+                TagState t = Find(mac);
+                if (t == null) return ToolResult.Bad("Chippen ligger ikke på læseren længere");
+                if (string.IsNullOrEmpty(library)) return ToolResult.Bad("Biblioteksnummeret er ikke sat (Indstillinger)");
+                if (num < 1 || num > 99 || seq < 1 || seq > num) return ToolResult.Bad("Del " + seq + " af " + num + " giver ikke mening");
+                byte[] data;
+                try { data = TagContent.Build(barcode, num, seq, TagContent.DefaultCountry, library); }
+                catch (ArgumentException e) { return ToolResult.Bad(e.Message); }
+
+                bool same = t.Raw != null && t.Raw.SequenceEqual(data);
+                if (t.Kind != "blank" && !same && !confirmed)
+                    return new ToolResult { NeedsConfirm = true, Message = t.Kind == "danish" && t.Content.Barcode.Length > 0 ? "materialenummer " + t.Content.Barcode : "andet indhold" };
+
+                string old = t.ToJson(), err;
+                if (!reader.WriteDanish(t.Uid, data, out err))
+                {
+                    Count("WriteTagFail");
+                    return ToolResult.Bad("Chippen kunne ikke programmeres: " + err);
+                }
+                Count("WriteTagSucc");
+                t.Raw = data;
+                t.Content = TagContent.Parse(data);
+                if (reader.WriteAfi(t.Uid, TagState.AFI_ON, out err)) t.Afi = TagState.AFI_ON;
+                log.Write("Værktøj: programmeret " + barcode + " del " + seq + "/" + num + " (" + TagContent.DefaultCountry + "-" + library + ")" + (err != null && t.Afi != TagState.AFI_ON ? " - men alarmen kunne ikke slås til: " + err : ""));
+                Changed(t, old);
+                if (t.Afi != TagState.AFI_ON) return ToolResult.Bad("Programmeret, men alarmen kunne ikke slås til: " + err);
+                return ToolResult.Good("Programmeret ✓");
+            });
+        }
+
+        public void SetLogRaw(bool on)
+        {
+            LogRaw = on;
         }
 
         // ---------- Selvtest ----------

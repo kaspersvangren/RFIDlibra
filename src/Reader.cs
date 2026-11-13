@@ -102,8 +102,8 @@ namespace RFIDlibra
         /// Hvor længe feusb venter på svar (ms). PR101 svarer på 12-60 ms; inventory med tags tager ~200 ms.
         /// </summary>
         public int TimeoutMs = 150;
-        public int InventoryTimeoutMs = 500;
-        public int WriteTimeoutMs = 500;
+        public int InventoryTimeoutMs = 300;   // inventory tager 110-200 ms
+        public int WriteTimeoutMs = 500;       // skriv blok 0-7 tager ~110 ms; alarm (AFI) svarer på ~16 ms og bruger TimeoutMs
 
         /// <summary>Mindste pause (ms) fra et svar til næste kommando sendes. Afprøves i selvtesten.</summary>
         public int GapMs = 5;
@@ -115,6 +115,7 @@ namespace RFIDlibra
         public long LastMs;
 
         private int appliedTimeout = -1;
+        private long lastInventoryMs;
         private readonly Stopwatch sinceLast = Stopwatch.StartNew();
 
         private void ApplyTimeout(int ms)
@@ -139,8 +140,9 @@ namespace RFIDlibra
             if (cmd == Protocol.CMD_ISO && (data == null || data.Length == 0 || Array.IndexOf(Protocol.AllowedIso, data[0]) < 0))
                 throw new InvalidOperationException("ISO-kommando er ikke tilladt");
             byte iso = cmd == Protocol.CMD_ISO ? data[0] : (byte)0;
-            int timeout = iso == Protocol.ISO_INVENTORY ? InventoryTimeoutMs
-                : iso == Protocol.ISO_WRITE_BLOCKS || iso == Protocol.ISO_WRITE_AFI ? WriteTimeoutMs
+            // Inventory tager længere tid, jo flere tags der ligger på læseren: ventetiden følger med (mindst 300 ms)
+            int timeout = iso == Protocol.ISO_INVENTORY ? (int)Math.Min(2000, Math.Max(InventoryTimeoutMs, lastInventoryMs * 2))
+                : iso == Protocol.ISO_WRITE_BLOCKS ? WriteTimeoutMs
                 : TimeoutMs;
             byte[] frame = Protocol.Build(Advanced, Address, cmd, data);
             Stopwatch total = Stopwatch.StartNew();
@@ -170,6 +172,7 @@ namespace RFIDlibra
                         continue;
                     }
                     if (!r.CrcOk) log.Write("  " + what + ": advarsel - CRC i svaret passer ikke.");
+                    if (iso == Protocol.ISO_INVENTORY) lastInventoryMs = ms;
                     if (attempt > 1)
                     {
                         if (attempt <= SameHandleTries) RescuedSameHandle++; else RescuedReopen++;
@@ -191,6 +194,8 @@ namespace RFIDlibra
                     break;
                 }
                 Timeouts++;
+                // Mange tags på læseren kan gøre inventory langsommere end ventetiden: giv næste forsøg længere tid
+                if (iso == Protocol.ISO_INVENTORY) timeout = Math.Min(2000, timeout * 2);
                 if (attempt == SameHandleTries) Reopen();
             }
             GaveUp++;
