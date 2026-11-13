@@ -47,6 +47,9 @@ namespace RFIDlibra
         private delegate int GetScanListParaFn(int index, byte[] para, byte[] value);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int SetDeviceParaFn(int devHnd, byte[] para, byte[] value);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int TransceiveFn(int devHnd, byte[] iface, int dir, byte[] send, int sendLen, byte[] rec, int recLen);
 
         private readonly GetDLLVersionFn getDllVersion;
@@ -56,6 +59,7 @@ namespace RFIDlibra
         private readonly ClearScanListFn clearScanList;
         private readonly GetScanListParaFn getScanListPara;
         private readonly TransceiveFn transceive;
+        private readonly SetDeviceParaFn setDevicePara;
 
         public string Path { get; private set; }
 
@@ -69,6 +73,13 @@ namespace RFIDlibra
             clearScanList = Get<ClearScanListFn>(module, "FEUSB_ClearScanList");
             getScanListPara = Get<GetScanListParaFn>(module, "FEUSB_GetScanListPara");
             transceive = Get<TransceiveFn>(module, "FEUSB_Transceive");
+            setDevicePara = Get<SetDeviceParaFn>(module, "FEUSB_SetDevicePara");
+        }
+
+        /// <summary>Sætter, hvor længe feusb venter på svar fra læseren (FEIG-parameteren "Timeout", i ms).</summary>
+        public int SetTimeout(int handle, int ms)
+        {
+            return setDevicePara(handle, Z("Timeout"), Z(ms.ToString()));
         }
 
         private static T Get<T>(IntPtr module, string name) where T : class

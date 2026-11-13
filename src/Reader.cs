@@ -7,8 +7,8 @@ namespace RFIDlibra
 {
     /// <summary>
     /// Snakker med én FEIG-læser via feusb.dll. Bruges kun fra én tråd (arbejdstråden i Worker).
-    /// Testudgaven er bygget til at finde ud af, hvad en gammel PR101 (firmware 1.x) kan klare,
-    /// så alt rå trafik kan logges.
+    /// PR101 med firmware 1.7 taber af og til et svar (USB-timeout) - også med Bibliothecas gamle software.
+    /// Derfor kort ventetid og automatisk nyt forsøg i Send.
     /// </summary>
     public sealed class Reader
     {
@@ -36,8 +36,9 @@ namespace RFIDlibra
         {
             get
             {
-                return Transfers + " kommandoer, " + Timeouts + " timeouts"
+                return Transfers + " USB-kald, " + Timeouts + " tabte svar"
                     + (Transfers > 0 ? " (" + (100.0 * Timeouts / Transfers).ToString("0.0") + " %)" : "")
+                    + "; reddet " + RescuedSameHandle + " straks + " + RescuedReopen + " efter genåbning, opgivet " + GaveUp
                     + (OtherErrors > 0 ? ", " + OtherErrors + " andre USB-fejl" : "");
             }
         }
@@ -69,10 +70,11 @@ namespace RFIDlibra
                 return false;
             }
             handle = h;
+            ApplyTimeout();
             DeviceName = usb.ScanListPara("DeviceName");
             Family = usb.ScanListPara("FamilyName");
             DeviceId = usb.ScanListPara("Device-ID");
-            log.Write("Læser fundet: " + DeviceName + " (familie " + Family + ", ID " + DeviceId + ")");
+            log.Write("Læser fundet: " + DeviceName + " (familie " + Family + ", ID " + DeviceId + "), ventetid " + TimeoutMs + " ms");
 
             // Prøv rammeformater og busadresser, til læseren svarer på "hvilken softwareversion har du?"
             bool[] formats = { false, true };
@@ -99,53 +101,96 @@ namespace RFIDlibra
             return false;
         }
 
-        /// <summary>Sender én kommando. Returnerer null ved USB-fejl eller uforståeligt svar.</summary>
+        /// <summary>Hvor længe feusb venter på svar (ms). PR101 svarer normalt på 12-60 ms.</summary>
+        public int TimeoutMs = 400;
+
+        /// <summary>Hvordan tabte svar blev reddet: ved nyt forsøg på samme forbindelse, efter genåbning, eller slet ikke.</summary>
+        public int RescuedSameHandle, RescuedReopen, GaveUp;
+
+        /// <summary>Samlet tid for seneste Send, inklusive eventuelle nye forsøg.</summary>
+        public long LastMs;
+
+        private void ApplyTimeout()
+        {
+            int r = usb.SetTimeout(handle, TimeoutMs);
+            if (r < 0) log.Write("  Kunne ikke sætte ventetid til " + TimeoutMs + " ms: " + usb.ErrorText(r));
+        }
+
+        /// <summary>
+        /// Sender én kommando. PR101 med firmware 1.7 taber af og til et svar på USB; så prøves der
+        /// først igen på samme forbindelse, derefter efter en genåbning (højst 3 forsøg i alt).
+        /// Returnerer null ved fejl eller uforståeligt svar.
+        /// </summary>
         public Protocol.Response Send(byte cmd, byte[] data, string what)
         {
             if (!IsOpen) return null;
             byte[] frame = Protocol.Build(Advanced, Address, cmd, data);
-            Stopwatch sw = Stopwatch.StartNew();
-            int err;
-            byte[] rec = usb.Transceive(handle, frame, out err);
-            long ms = sw.ElapsedMilliseconds;
-            Transfers++;
-            if (rec == null)
+            Stopwatch total = Stopwatch.StartNew();
+            for (int attempt = 1; attempt <= 3; attempt++)
             {
-                if (err == Feusb.ERR_TIMEOUT) Timeouts++; else OtherErrors++;
-                log.Write("  " + what + ": SENDT " + Protocol.Hex(frame) + "  -> USB-FEJL " + usb.ErrorText(err) + " efter " + ms + " ms");
-                if (err == Feusb.ERR_TIMEOUT)
+                if (!IsOpen) break;
+                Stopwatch sw = Stopwatch.StartNew();
+                int err;
+                byte[] rec = usb.Transceive(handle, frame, out err);
+                long ms = sw.ElapsedMilliseconds;
+                Transfers++;
+                if (rec != null)
                 {
-                    // Som Bibliothecas software: efter timeout er USB-forbindelsen ubrugelig, så den åbnes igen.
-                    log.Write("  Timeout - lukker og genåbner forbindelsen.");
-                    ReopenQuietly();
+                    Protocol.Response r = Protocol.Parse(rec);
+                    if (LogRaw || attempt > 1)
+                        log.Write("  " + what + ": SENDT " + Protocol.Hex(frame) + "  SVAR " + Protocol.Hex(rec) + "  (" + ms + " ms)");
+                    if (r == null)
+                    {
+                        log.Write("  " + what + ": svaret kunne ikke fortolkes - rydder op.");
+                        Reopen();
+                        continue;
+                    }
+                    if (r.Cmd != cmd)
+                    {
+                        log.Write("  " + what + ": svar på en anden kommando (0x" + r.Cmd.ToString("X2") + ") - rydder op.");
+                        Reopen();
+                        continue;
+                    }
+                    if (!r.CrcOk) log.Write("  " + what + ": advarsel - CRC i svaret passer ikke.");
+                    if (attempt == 2) RescuedSameHandle++;
+                    if (attempt == 3) RescuedReopen++;
+                    LastMs = total.ElapsedMilliseconds;
+                    if (attempt > 1) log.Write("  " + what + ": reddet ved forsøg " + attempt + " (i alt " + LastMs + " ms)");
+                    return r;
                 }
-                return null;
+
+                log.Write("  " + what + ": SENDT " + Protocol.Hex(frame) + "  -> USB-FEJL " + usb.ErrorText(err) + " efter " + ms + " ms (forsøg " + attempt + ")");
+                if (err != Feusb.ERR_TIMEOUT)
+                {
+                    OtherErrors++;
+                    log.Write("  Forbindelsen til læseren er tabt.");
+                    Close();
+                    break;
+                }
+                Timeouts++;
+                if (attempt == 2) Reopen();
             }
-            Protocol.Response r = Protocol.Parse(rec);
-            if (LogRaw)
-                log.Write("  " + what + ": SENDT " + Protocol.Hex(frame) + "  SVAR " + Protocol.Hex(rec) + "  (" + ms + " ms)");
-            if (r == null)
-            {
-                log.Write("  " + what + ": svaret kunne ikke fortolkes.");
-                return null;
-            }
-            if (!r.CrcOk) log.Write("  " + what + ": advarsel - CRC i svaret passer ikke.");
-            return r;
+            GaveUp++;
+            LastMs = total.ElapsedMilliseconds;
+            log.Write("  " + what + ": opgivet (i alt " + LastMs + " ms)");
+            return null;
         }
 
-        private void ReopenQuietly()
+        /// <summary>Genåbner USB-forbindelsen (rydder op efter et tabt svar).</summary>
+        private void Reopen()
         {
             bool adv = Advanced;
             byte adr = Address;
             Close();
-            System.Threading.Thread.Sleep(300);
+            System.Threading.Thread.Sleep(50);
             int h = usb.ScanAndOpenFirst();
             if (h > 0)
             {
                 handle = h;
                 Advanced = adv;
                 Address = adr;
-                log.Write("  Forbindelsen er åben igen.");
+                ApplyTimeout();
+                log.Write("  Forbindelsen er genåbnet.");
             }
             else
             {
@@ -177,6 +222,11 @@ namespace RFIDlibra
             if (r.Status != 0x00 && r.Status != 0x94 && r.Status != 0x83 && r.Status != 0x84) return null;
             if (r.Data.Length < 1) return list;
             int n = r.Data[0];
+            if (r.Data.Length < 1 + 10 * n)
+            {
+                log.Write("  inventory: uventet svarlængde (" + n + " tags, " + r.Data.Length + " bytes) - ignoreres.");
+                return null;
+            }
             int p = 1;
             for (int i = 0; i < n && p + 10 <= r.Data.Length; i++, p += 10)
             {
