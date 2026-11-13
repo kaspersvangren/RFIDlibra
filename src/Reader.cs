@@ -24,9 +24,6 @@ namespace RFIDlibra
         public string Family { get; private set; }
         public string Firmware { get; private set; }
 
-        /// <summary>Største antal blokke, der er lykkedes at læse i ét hug (0 = ikke afprøvet endnu).</summary>
-        public int BlocksPerRead = 8;
-
         public bool LogRaw = true;
 
         /// <summary>Tællere siden programmet startede: antal kommandoer, timeouts og andre USB-fejl.</summary>
@@ -70,11 +67,11 @@ namespace RFIDlibra
                 return false;
             }
             handle = h;
-            ApplyTimeout();
+            appliedTimeout = -1;
             DeviceName = usb.ScanListPara("DeviceName");
             Family = usb.ScanListPara("FamilyName");
             DeviceId = usb.ScanListPara("Device-ID");
-            log.Write("Læser fundet: " + DeviceName + " (familie " + Family + ", ID " + DeviceId + "), ventetid " + TimeoutMs + " ms");
+            log.Write("Læser fundet: " + DeviceName + " (familie " + Family + ", ID " + DeviceId + "), ventetid " + TimeoutMs + "/" + InventoryTimeoutMs + " ms");
 
             // Prøv rammeformater og busadresser, til læseren svarer på "hvilken softwareversion har du?"
             bool[] formats = { false, true };
@@ -101,8 +98,14 @@ namespace RFIDlibra
             return false;
         }
 
-        /// <summary>Hvor længe feusb venter på svar (ms). PR101 svarer normalt på 12-60 ms.</summary>
-        public int TimeoutMs = 400;
+        /// <summary>
+        /// Hvor længe feusb venter på svar (ms). PR101 svarer på 12-60 ms; inventory med tags tager ~200 ms.
+        /// </summary>
+        public int TimeoutMs = 150;
+        public int InventoryTimeoutMs = 500;
+
+        /// <summary>Mindste pause (ms) fra et svar til næste kommando sendes. Afprøves i selvtesten.</summary>
+        public int GapMs = 0;
 
         /// <summary>Hvordan tabte svar blev reddet: ved nyt forsøg på samme forbindelse, efter genåbning, eller slet ikke.</summary>
         public int RescuedSameHandle, RescuedReopen, GaveUp;
@@ -110,56 +113,70 @@ namespace RFIDlibra
         /// <summary>Samlet tid for seneste Send, inklusive eventuelle nye forsøg.</summary>
         public long LastMs;
 
-        private void ApplyTimeout()
+        private int appliedTimeout = -1;
+        private readonly Stopwatch sinceLast = Stopwatch.StartNew();
+
+        private void ApplyTimeout(int ms)
         {
-            int r = usb.SetTimeout(handle, TimeoutMs);
-            if (r < 0) log.Write("  Kunne ikke sætte ventetid til " + TimeoutMs + " ms: " + usb.ErrorText(r));
+            if (ms == appliedTimeout) return;
+            int r = usb.SetTimeout(handle, ms);
+            if (r < 0) log.Write("  Kunne ikke sætte ventetid til " + ms + " ms: " + usb.ErrorText(r));
+            else appliedTimeout = ms;
         }
+
+        private const int SameHandleTries = 3;
+        private const int AfterReopenTries = 2;
 
         /// <summary>
         /// Sender én kommando. PR101 med firmware 1.7 taber af og til et svar på USB; så prøves der
-        /// først igen på samme forbindelse, derefter efter en genåbning (højst 3 forsøg i alt).
+        /// op til 3 gange på samme forbindelse, derefter genåbnes forbindelsen og der prøves 2 gange til.
         /// Returnerer null ved fejl eller uforståeligt svar.
         /// </summary>
         public Protocol.Response Send(byte cmd, byte[] data, string what)
         {
             if (!IsOpen) return null;
+            bool inventory = cmd == Protocol.CMD_ISO && data != null && data.Length > 0 && data[0] == Protocol.ISO_INVENTORY;
             byte[] frame = Protocol.Build(Advanced, Address, cmd, data);
             Stopwatch total = Stopwatch.StartNew();
-            for (int attempt = 1; attempt <= 3; attempt++)
+            int maxTries = SameHandleTries + AfterReopenTries;
+            for (int attempt = 1; attempt <= maxTries; attempt++)
             {
                 if (!IsOpen) break;
+                ApplyTimeout(inventory ? InventoryTimeoutMs : TimeoutMs);
+                long wait = GapMs - sinceLast.ElapsedMilliseconds;
+                if (wait > 0) System.Threading.Thread.Sleep((int)wait);
+
                 Stopwatch sw = Stopwatch.StartNew();
                 int err;
                 byte[] rec = usb.Transceive(handle, frame, out err);
                 long ms = sw.ElapsedMilliseconds;
+                sinceLast.Restart();
                 Transfers++;
                 if (rec != null)
                 {
                     Protocol.Response r = Protocol.Parse(rec);
                     if (LogRaw || attempt > 1)
                         log.Write("  " + what + ": SENDT " + Protocol.Hex(frame) + "  SVAR " + Protocol.Hex(rec) + "  (" + ms + " ms)");
-                    if (r == null)
+                    if (r == null || r.Cmd != cmd)
                     {
-                        log.Write("  " + what + ": svaret kunne ikke fortolkes - rydder op.");
-                        Reopen();
-                        continue;
-                    }
-                    if (r.Cmd != cmd)
-                    {
-                        log.Write("  " + what + ": svar på en anden kommando (0x" + r.Cmd.ToString("X2") + ") - rydder op.");
+                        log.Write("  " + what + ": " + (r == null ? "svaret kunne ikke fortolkes" : "svar på en anden kommando (0x" + r.Cmd.ToString("X2") + ")") + " - rydder op.");
                         Reopen();
                         continue;
                     }
                     if (!r.CrcOk) log.Write("  " + what + ": advarsel - CRC i svaret passer ikke.");
-                    if (attempt == 2) RescuedSameHandle++;
-                    if (attempt == 3) RescuedReopen++;
+                    if (attempt > 1)
+                    {
+                        if (attempt <= SameHandleTries) RescuedSameHandle++; else RescuedReopen++;
+                    }
                     LastMs = total.ElapsedMilliseconds;
                     if (attempt > 1) log.Write("  " + what + ": reddet ved forsøg " + attempt + " (i alt " + LastMs + " ms)");
                     return r;
                 }
 
-                log.Write("  " + what + ": SENDT " + Protocol.Hex(frame) + "  -> USB-FEJL " + usb.ErrorText(err) + " efter " + ms + " ms (forsøg " + attempt + ")");
+                if (LogRaw || attempt > 1 || err != Feusb.ERR_TIMEOUT)
+                    log.Write("  " + what + ": SENDT " + Protocol.Hex(frame) + "  -> USB-FEJL " + usb.ErrorText(err) + " efter " + ms + " ms (forsøg " + attempt + ")");
+                else
+                    log.Write("  " + what + ": tabt svar efter " + ms + " ms (forsøg 1)");
                 if (err != Feusb.ERR_TIMEOUT)
                 {
                     OtherErrors++;
@@ -168,7 +185,7 @@ namespace RFIDlibra
                     break;
                 }
                 Timeouts++;
-                if (attempt == 2) Reopen();
+                if (attempt == SameHandleTries) Reopen();
             }
             GaveUp++;
             LastMs = total.ElapsedMilliseconds;
@@ -189,7 +206,7 @@ namespace RFIDlibra
                 handle = h;
                 Advanced = adv;
                 Address = adr;
-                ApplyTimeout();
+                appliedTimeout = -1;
                 log.Write("  Forbindelsen er genåbnet.");
             }
             else
@@ -294,35 +311,12 @@ namespace RFIDlibra
             return outp;
         }
 
-        /// <summary>
-        /// Læser blok 0-7 (de 32 bytes i den danske datamodel). Starter med det antal blokke pr. kald,
-        /// der virkede sidst, og halverer, hvis læseren ikke kan klare det.
-        /// </summary>
+        /// <summary>Læser blok 0-7 (de 32 bytes i den danske datamodel) i ét hug. Antallet af blokke betyder intet for PR101's tabte svar.</summary>
         public byte[] ReadDanish(byte[] uid, out string method)
         {
-            method = null;
-            int[] tries = { 8, 4, 2, 1 };
-            foreach (int chunk in tries.Where(c => c <= BlocksPerRead))
-            {
-                byte[] all = new byte[32];
-                bool ok = true;
-                for (int first = 0; first < 8 && ok; first += chunk)
-                {
-                    byte[] part = ReadBlocksOnce(uid, first, chunk);
-                    if (part == null || part.Length != chunk * 4) { ok = false; break; }
-                    Array.Copy(part, 0, all, first * 4, part.Length);
-                }
-                if (!IsOpen) return null;
-                if (ok)
-                {
-                    if (chunk != BlocksPerRead) log.Write("Læseren klarer " + chunk + " blok(ke) ad gangen - det bruges fremover.");
-                    BlocksPerRead = chunk;
-                    method = chunk == 8 ? "8 blokke på én gang" : chunk + " blok(ke) ad gangen";
-                    return all;
-                }
-                log.Write("  " + chunk + " blok(ke) ad gangen virkede ikke - prøver mindre bidder.");
-            }
-            return null;
+            method = "8 blokke på én gang";
+            byte[] all = ReadBlocksOnce(uid, 0, 8);
+            return all != null && all.Length == 32 ? all : null;
         }
     }
 }

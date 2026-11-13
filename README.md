@@ -2,7 +2,7 @@
 
 Eget Windows-program, der skal få bibliotekets FEIG RFID-læsere (fx den lille **ID ISC.PR101**) til at virke med Cicero Mobile, ligesom [NFClibra](https://github.com/kaspersvangren/NFClibra) gør det på telefonen.
 
-**Status: testudgave 0.3.0.** Programmet taler endnu ikke med Cicero. Det finder læseren, viser de tags, der ligger på den, og logger alt, så vi kan se, hvad den gamle PR101 kan klare.
+**Status: testudgave 0.4.0.** Programmet taler endnu ikke med Cicero. Det finder læseren, viser de tags, der ligger på den, og logger alt, så vi kan se, hvad den gamle PR101 kan klare.
 
 Seneste version: [RFIDlibra.exe](https://github.com/kaspersvangren/rfidlibra/releases/latest/download/RFIDlibra.exe) (64-bit) og [RFIDlibra-32bit.exe](https://github.com/kaspersvangren/rfidlibra/releases/latest/download/RFIDlibra-32bit.exe) (til 32-bit feusb-filer, fx fra den gamle Bibliotheca-software)
 
@@ -22,6 +22,6 @@ Programmet **skriver ikke** til tags. Det læser kun.
 - USB-forbindelsen går gennem FEIG's `feusb.dll`, som Bibliotheca allerede har installeret. Programmet leder efter `feusb*.dll` ved siden af sig selv, i mapperne `RFIDIF`/`RFIDIFServer` på skrivebordet, i Tag Manager (`bibliotheca\Common\TagManager(PM)\x64` og `x86`) og i den gamle `Bibliotheca RFID\RFIDIF`. Filen vælges i listen øverst; valget huskes. 64-bit-filer kræver `RFIDlibra.exe`, 32-bit-filer `RFIDlibra-32bit.exe`.
 - Kommandoerne til læseren (FEIG's "ISO Host"-protokol med CRC) bygges af programmet selv.
 - Tagindholdet fortolkes efter den danske datamodel, på samme måde som NFClibra og Deichmans [go-feig](https://github.com/digibib/go-feig).
-- PR101 med firmware 1.7 taber af og til et svar på USB (timeout), uanset hvor meget der læses, og uanset feusb-version (5.0 og 6.0 er afprøvet). Bibliothecas nye staffConnect link går i stå på det. RFIDlibra venter kun 400 ms på svar og prøver automatisk igen (samme forbindelse, derefter genåbning).
+- PR101 med firmware 1.7 taber af og til et svar på USB (timeout), uanset hvor meget der læses, og uanset feusb-version (5.0 og 6.0 er afprøvet). Bibliothecas nye staffConnect link går i stå på det. RFIDlibra venter kun 150 ms på svar (500 ms ved søgning efter tags) og prøver automatisk igen: op til 3 gange på samme forbindelse, derefter efter en genåbning. Selvtesten undersøger, om en pause mellem kommandoerne får læseren til at tabe færre svar.
 
 Loggen gemmes også i `%LOCALAPPDATA%\RFIDlibra`.

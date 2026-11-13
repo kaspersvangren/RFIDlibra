@@ -10,7 +10,7 @@ namespace RFIDlibra
 {
     public sealed class MainForm : Form
     {
-        public const string Version = "0.3.0";
+        public const string Version = "0.4.0";
 
         private readonly Log log = new Log();
         private Feusb usb;

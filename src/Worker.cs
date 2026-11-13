@@ -30,6 +30,7 @@ namespace RFIDlibra
         private volatile bool running;
         private volatile bool selfTestRequested;
         private readonly Dictionary<string, TagView> tags = new Dictionary<string, TagView>();
+        private readonly Dictionary<string, int> failedReads = new Dictionary<string, int>();
         private string lastRaw;
         private string baseStatus = "";
         private DateTime lastStats = DateTime.MinValue;
@@ -123,14 +124,29 @@ namespace RFIDlibra
                     {
                         log.Write("Tag fjernet: " + gone);
                         tags.Remove(gone);
+                        failedReads.Remove(gone);
                         changed = true;
                     }
+                    foreach (string k in failedReads.Keys.Where(k => !present.Contains(k)).ToList()) failedReads.Remove(k);
                     foreach (Reader.Seen s in seen)
                     {
                         if (tags.ContainsKey(s.Key)) continue;
-                        log.Write("Nyt tag: " + s.Key + " (TR-TYPE 0x" + s.TrType.ToString("X2") + ", DSFID 0x" + s.Dsfid.ToString("X2") + ")");
-                        tags[s.Key] = ReadTag(s);
-                        changed = true;
+                        int fails;
+                        failedReads.TryGetValue(s.Key, out fails);
+                        if (fails == 0)
+                            log.Write("Nyt tag: " + s.Key + " (TR-TYPE 0x" + s.TrType.ToString("X2") + ", DSFID 0x" + s.Dsfid.ToString("X2") + ")");
+                        TagView v = ReadTag(s);
+                        if (v.Barcode.Length > 0 || fails >= 4)
+                        {
+                            tags[s.Key] = v;
+                            failedReads.Remove(s.Key);
+                            changed = true;
+                        }
+                        else
+                        {
+                            failedReads[s.Key] = fails + 1;
+                            log.Write("Tag " + s.Key + ": prøver igen i næste runde (" + (fails + 1) + ". gang).");
+                        }
                         if (!reader.IsOpen) break;
                     }
                     if (changed) Publish();
@@ -191,13 +207,16 @@ namespace RFIDlibra
             return v;
         }
 
-        /// <summary>Prøver alle læsemåder på de tags, der ligger på læseren, og skriver resultatet i loggen.</summary>
+        /// <summary>
+        /// Afprøver, om PR101 taber færre svar, når der holdes pause mellem kommandoerne.
+        /// For hver pause køres 15 "bøger" som ved skranken: alarmstatus + læsning af blok 0-7.
+        /// </summary>
         private void SelfTest(List<Reader.Seen> seen)
         {
             log.Write("===== SELVTEST =====");
             log.Write("Læser: " + reader.DeviceName + ", familie " + reader.Family + ", ID " + reader.DeviceId
                 + ", firmware " + reader.Firmware + ", " + (reader.Advanced ? "Advanced" : "Standard") + "-rammer, adresse 0x" + reader.Address.ToString("X2"));
-            log.Write("feusb.dll: " + usb.Path + " (version " + usb.DllVersion() + ")");
+            log.Write("feusb.dll: " + usb.Path + " (version " + usb.DllVersion() + "), ventetid " + reader.TimeoutMs + " ms (inventory " + reader.InventoryTimeoutMs + " ms)");
             if (seen.Count == 0)
             {
                 log.Write("Ingen tags på læseren - læg en bog på og tryk igen.");
@@ -206,42 +225,47 @@ namespace RFIDlibra
             }
             Reader.Seen s = seen[0];
             log.Write("Tester på tag " + s.Key + (seen.Count > 1 ? " (der ligger " + seen.Count + " tags - kun det første testes)" : ""));
-            int beforeT = reader.Transfers, beforeTo = reader.Timeouts;
-            int beforeR1 = reader.RescuedSameHandle, beforeR2 = reader.RescuedReopen, beforeG = reader.GaveUp;
-            const int runs = 5;
+
+            int keepGap = reader.GapMs;
+            bool keepRaw = reader.LogRaw;
+            reader.LogRaw = false; // kun tabte svar og redninger logges under testen
             List<string> summary = new List<string>();
-            summary.Add(Measure("systeminfo/AFI", runs, () => reader.ReadAfi(s.Uid) != null));
-            foreach (int n in new[] { 1, 2, 4, 8, 9, 16, 28 })
+            const int books = 15;
+            try
             {
-                if (!reader.IsOpen) { summary.Add("Forbindelsen er tabt - testen stoppede her."); break; }
-                int count = n;
-                summary.Add(Measure(n + " blok(ke) på én gang", runs, () => reader.ReadBlocksOnce(s.Uid, 0, count) != null));
+                foreach (int gap in new[] { 0, 5, 20, 50 })
+                {
+                    if (!reader.IsOpen) { summary.Add("Forbindelsen er tabt - testen stoppede her."); break; }
+                    reader.GapMs = gap;
+                    log.Write("--- pause " + gap + " ms ---");
+                    int t0 = reader.Transfers, to0 = reader.Timeouts, g0 = reader.GaveUp;
+                    int ok = 0;
+                    long sum = 0, max = 0;
+                    for (int i = 0; i < books && reader.IsOpen; i++)
+                    {
+                        System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+                        string m;
+                        bool good = reader.ReadAfi(s.Uid) != null && reader.ReadDanish(s.Uid, out m) != null;
+                        long ms = sw.ElapsedMilliseconds;
+                        if (good) ok++;
+                        sum += ms;
+                        if (ms > max) max = ms;
+                    }
+                    int calls = reader.Transfers - t0, lost = reader.Timeouts - to0;
+                    summary.Add("pause " + gap.ToString().PadLeft(2) + " ms: " + ok + " af " + books + " bøger OK, tabte svar " + lost + " af " + calls
+                        + " (" + (calls > 0 ? (100.0 * lost / calls).ToString("0") : "0") + " %), opgivet " + (reader.GaveUp - g0)
+                        + ", pr. bog i snit " + (sum / books) + " ms, længst " + max + " ms");
+                }
             }
-            summary.Add(Measure("hele tagget (blok 0-7) som ved skranken", runs, () => { string m; return reader.ReadDanish(s.Uid, out m) != null; }));
+            finally
+            {
+                reader.GapMs = keepGap;
+                reader.LogRaw = keepRaw;
+            }
             log.Write("----- RESULTAT -----");
-            log.Write("feusb: " + System.IO.Path.GetFileName(usb.Path) + " " + usb.DllVersion() + " (" + (Environment.Is64BitProcess ? "64" : "32") + "-bit), ventetid " + reader.TimeoutMs + " ms");
             foreach (string line in summary) log.Write(line);
-            log.Write("Under selvtesten: " + (reader.Transfers - beforeT) + " USB-kald, " + (reader.Timeouts - beforeTo) + " tabte svar; reddet "
-                + (reader.RescuedSameHandle - beforeR1) + " straks + " + (reader.RescuedReopen - beforeR2) + " efter genåbning, opgivet " + (reader.GaveUp - beforeG));
             log.Write("Siden start: " + reader.Stats);
             log.Write("===== SELVTEST SLUT =====");
-        }
-
-        /// <summary>Kører en læsning flere gange og opsummerer: hvor mange lykkedes, og hvor lang tid det tog.</summary>
-        private string Measure(string name, int runs, Func<bool> op)
-        {
-            int ok = 0;
-            long sum = 0, max = 0;
-            for (int i = 0; i < runs && reader.IsOpen; i++)
-            {
-                System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
-                bool good = op();
-                long ms = sw.ElapsedMilliseconds;
-                if (good) ok++;
-                sum += ms;
-                if (ms > max) max = ms;
-            }
-            return name + ": " + ok + " af " + runs + " OK, i snit " + (runs > 0 ? sum / runs : 0) + " ms, længst " + max + " ms";
         }
 
         private void Sleep(int ms)
