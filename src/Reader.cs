@@ -29,6 +29,19 @@ namespace RFIDlibra
 
         public bool LogRaw = true;
 
+        /// <summary>Tællere siden programmet startede: antal kommandoer, timeouts og andre USB-fejl.</summary>
+        public int Transfers, Timeouts, OtherErrors;
+
+        public string Stats
+        {
+            get
+            {
+                return Transfers + " kommandoer, " + Timeouts + " timeouts"
+                    + (Transfers > 0 ? " (" + (100.0 * Timeouts / Transfers).ToString("0.0") + " %)" : "")
+                    + (OtherErrors > 0 ? ", " + OtherErrors + " andre USB-fejl" : "");
+            }
+        }
+
         public Reader(Feusb usb, Log log)
         {
             this.usb = usb;
@@ -95,8 +108,10 @@ namespace RFIDlibra
             int err;
             byte[] rec = usb.Transceive(handle, frame, out err);
             long ms = sw.ElapsedMilliseconds;
+            Transfers++;
             if (rec == null)
             {
+                if (err == Feusb.ERR_TIMEOUT) Timeouts++; else OtherErrors++;
                 log.Write("  " + what + ": SENDT " + Protocol.Hex(frame) + "  -> USB-FEJL " + usb.ErrorText(err) + " efter " + ms + " ms");
                 if (err == Feusb.ERR_TIMEOUT)
                 {

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -7,9 +9,10 @@ namespace RFIDlibra
 {
     /// <summary>
     /// Tynd indpakning af FEIG's feusb.dll (USB-delen af FEIG's SDK).
-    /// Vi bruger den fil, Bibliotheca allerede har installeret, og leverer den ikke selv.
-    /// Funktionerne findes med GetProcAddress, så vi selv kan vælge, hvilken feusb.dll der indlæses.
-    /// Programmet kører altid som 64-bit, så kaldkonventionen er entydig.
+    /// Vi bruger filer, Bibliotheca allerede har installeret, og leverer dem ikke selv.
+    /// Funktionerne findes med GetProcAddress, så vi selv kan vælge, hvilken feusb.dll der indlæses
+    /// (fx den gamle 5.0 eller FeUsbOLD 4.2.6 fra den gamle Bibliotheca-software).
+    /// FEIG erklærer funktionerne som CALLBACK (stdcall); på 64-bit er der kun én kaldkonvention.
     /// </summary>
     public sealed class Feusb
     {
@@ -71,39 +74,106 @@ namespace RFIDlibra
         private static T Get<T>(IntPtr module, string name) where T : class
         {
             IntPtr p = GetProcAddress(module, name);
-            if (p == IntPtr.Zero) throw new EntryPointNotFoundException("feusb.dll mangler funktionen " + name);
+            if (p == IntPtr.Zero) throw new EntryPointNotFoundException("filen mangler funktionen " + name);
             return Marshal.GetDelegateForFunctionPointer(p, typeof(T)) as T;
         }
 
-        /// <summary>Steder vi leder efter feusb.dll, i prioriteret rækkefølge.</summary>
-        public static string[] Candidates()
+        /// <summary>En feusb-fil, programmet har fundet på disken.</summary>
+        public sealed class Candidate
         {
-            string exeDir = AppDomain.CurrentDomain.BaseDirectory;
-            string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-            if (string.IsNullOrEmpty(pf86)) pf86 = @"C:\Program Files (x86)";
-            return new[]
+            public string Path;
+            public string Version;
+            public int Bits;      // 32, 64 eller 0 (ukendt)
+            public bool Usable { get { return Bits == (Environment.Is64BitProcess ? 64 : 32); } }
+
+            public override string ToString()
             {
-                System.IO.Path.Combine(exeDir, "feusb.dll"),
-                System.IO.Path.Combine(pf86, @"bibliotheca\Common\TagManager(PM)\x64\feusb.dll"),
-            };
+                string where = Path;
+                string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+                if (!string.IsNullOrEmpty(pf86) && where.StartsWith(pf86, StringComparison.OrdinalIgnoreCase))
+                    where = where.Substring(pf86.Length).TrimStart('\\');
+                string s = System.IO.Path.GetFileName(Path) + " " + Version + " (" + (Bits == 0 ? "?" : Bits.ToString()) + "-bit) - " + where;
+                if (!Usable) s += Bits == 64 ? "  [kræver RFIDlibra.exe]" : Bits == 32 ? "  [kræver RFIDlibra-32bit.exe]" : "  [kan ikke bruges]";
+                return s;
+            }
         }
 
-        public static Feusb Load(Action<string> log)
+        /// <summary>Mapper vi leder efter feusb-filer i.</summary>
+        private static IEnumerable<string> SearchDirs()
         {
-            if (!Environment.Is64BitProcess)
-                throw new InvalidOperationException("Programmet skal køre som 64-bit.");
-            foreach (string c in Candidates())
+            string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            if (string.IsNullOrEmpty(pf86)) pf86 = @"C:\Program Files (x86)";
+            string desk = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            string exeDir = AppDomain.CurrentDomain.BaseDirectory;
+            yield return exeDir;
+            yield return System.IO.Path.Combine(exeDir, "RFIDIF");
+            if (!string.IsNullOrEmpty(desk))
             {
-                if (!File.Exists(c)) { log("feusb.dll ikke fundet her: " + c); continue; }
-                IntPtr m = LoadLibraryEx(c, IntPtr.Zero, LOAD_WITH_ALTERED_SEARCH_PATH);
-                if (m == IntPtr.Zero)
-                {
-                    log("Kunne ikke indlæse " + c + " (Windows-fejl " + Marshal.GetLastWin32Error() + ")");
-                    continue;
-                }
-                return new Feusb(c, m);
+                yield return System.IO.Path.Combine(desk, "RFIDIF");
+                yield return System.IO.Path.Combine(desk, "RFIDIFServer");
             }
-            throw new FileNotFoundException("feusb.dll blev ikke fundet. Er Bibliothecas Tag Manager installeret?");
+            yield return System.IO.Path.Combine(pf86, @"bibliotheca\Common\TagManager(PM)\x64");
+            yield return System.IO.Path.Combine(pf86, @"bibliotheca\Common\TagManager(PM)\x86");
+            yield return System.IO.Path.Combine(pf86, @"Bibliotheca RFID\RFIDIF");
+            yield return System.IO.Path.Combine(pf86, @"Bibliotheca RFID\RFIDIFServer");
+        }
+
+        public static List<Candidate> FindCandidates(string extra)
+        {
+            List<Candidate> list = new List<Candidate>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> files = new List<string>();
+            if (!string.IsNullOrEmpty(extra)) files.Add(extra);
+            foreach (string d in SearchDirs())
+            {
+                try
+                {
+                    if (!Directory.Exists(d)) continue;
+                    foreach (string f in Directory.GetFiles(d, "feusb*.dll")) files.Add(f);
+                }
+                catch { }
+            }
+            foreach (string f in files)
+            {
+                string full;
+                try { full = System.IO.Path.GetFullPath(f); } catch { continue; }
+                if (!File.Exists(full) || !seen.Add(full)) continue;
+                Candidate c = new Candidate { Path = full, Bits = PeBits(full) };
+                try { c.Version = FileVersionInfo.GetVersionInfo(full).FileVersion ?? "?"; } catch { c.Version = "?"; }
+                list.Add(c);
+            }
+            return list;
+        }
+
+        /// <summary>Læser i filens PE-hoved, om den er 32- eller 64-bit.</summary>
+        public static int PeBits(string path)
+        {
+            try
+            {
+                using (FileStream fs = File.OpenRead(path))
+                using (BinaryReader br = new BinaryReader(fs))
+                {
+                    fs.Position = 0x3C;
+                    int pe = br.ReadInt32();
+                    fs.Position = pe + 4;
+                    ushort machine = br.ReadUInt16();
+                    if (machine == 0x014C) return 32;
+                    if (machine == 0x8664) return 64;
+                    return 0;
+                }
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        public static Feusb Load(string path)
+        {
+            IntPtr m = LoadLibraryEx(path, IntPtr.Zero, LOAD_WITH_ALTERED_SEARCH_PATH);
+            if (m == IntPtr.Zero)
+                throw new IOException("Kunne ikke indlæse " + path + " (Windows-fejl " + Marshal.GetLastWin32Error() + ")");
+            return new Feusb(path, m);
         }
 
         private static string Str(byte[] b)

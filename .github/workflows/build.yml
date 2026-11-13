@@ -17,9 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Byg RFIDlibra.exe
+      - name: Byg RFIDlibra.exe (64-bit) og RFIDlibra-32bit.exe
         shell: pwsh
-        run: dotnet build RFIDlibra.csproj -c Release -o out
+        run: |
+          dotnet build RFIDlibra.csproj -c Release -o out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -Recurse -Force obj
+          dotnet build RFIDlibra.csproj -c Release -p:PlatformTarget=x86 -p:AssemblyName=RFIDlibra-32bit -o out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem out/*.exe
 
       - name: Udgiv på GitHub
         shell: pwsh
@@ -32,13 +38,15 @@ jobs:
           Write-Host "Version $version"
           gh release view $tag --repo "${{ github.repository }}" *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag out/RFIDlibra.exe --clobber --repo "${{ github.repository }}"
+            gh release upload $tag out/RFIDlibra.exe out/RFIDlibra-32bit.exe --clobber --repo "${{ github.repository }}"
           } else {
-            gh release create $tag out/RFIDlibra.exe --title "RFIDlibra $version" --notes "Se CHANGELOG.md" --latest --repo "${{ github.repository }}"
+            gh release create $tag out/RFIDlibra.exe out/RFIDlibra-32bit.exe --title "RFIDlibra $version" --notes "Se CHANGELOG.md" --latest --repo "${{ github.repository }}"
           }
           exit $LASTEXITCODE
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: RFIDlibra
-          path: out/RFIDlibra.exe
+          path: |
+            out/RFIDlibra.exe
+            out/RFIDlibra-32bit.exe

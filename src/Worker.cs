@@ -31,6 +31,8 @@ namespace RFIDlibra
         private volatile bool selfTestRequested;
         private readonly Dictionary<string, TagView> tags = new Dictionary<string, TagView>();
         private string lastRaw;
+        private string baseStatus = "";
+        private DateTime lastStats = DateTime.MinValue;
 
         public event Action<string> Status;
         public event Action<List<TagView>> TagsChanged;
@@ -95,8 +97,9 @@ namespace RFIDlibra
                             Sleep(3000);
                             continue;
                         }
-                        SetStatus("Forbundet: " + reader.DeviceName + ", firmware " + reader.Firmware
-                            + (reader.Advanced ? " (Advanced)" : " (Standard)"));
+                        baseStatus = "Forbundet: " + reader.DeviceName + ", firmware " + reader.Firmware
+                            + (reader.Advanced ? " (Advanced)" : " (Standard)");
+                        SetStatus(baseStatus);
                         tags.Clear();
                         lastRaw = null;
                         Publish();
@@ -131,6 +134,12 @@ namespace RFIDlibra
                         if (!reader.IsOpen) break;
                     }
                     if (changed) Publish();
+
+                    if ((DateTime.Now - lastStats).TotalSeconds >= 2)
+                    {
+                        lastStats = DateTime.Now;
+                        SetStatus(baseStatus + "  |  " + reader.Stats);
+                    }
 
                     if (selfTestRequested)
                     {
@@ -197,15 +206,28 @@ namespace RFIDlibra
             }
             Reader.Seen s = seen[0];
             log.Write("Tester på tag " + s.Key + (seen.Count > 1 ? " (der ligger " + seen.Count + " tags - kun det første testes)" : ""));
-            int? afi = reader.ReadAfi(s.Uid);
-            log.Write("Resultat systeminfo/AFI: " + (afi == null ? "FEJL" : "OK, AFI 0x" + afi.Value.ToString("X2")));
+            int beforeT = reader.Transfers, beforeTo = reader.Timeouts;
+            List<string> summary = new List<string>();
+            int okAfi = 0;
+            for (int i = 0; i < 3 && reader.IsOpen; i++)
+                if (reader.ReadAfi(s.Uid) != null) okAfi++;
+            summary.Add("systeminfo/AFI: " + okAfi + " af 3 OK");
             foreach (int n in new[] { 1, 2, 4, 8, 9, 16, 28 })
             {
-                if (!reader.IsOpen) { log.Write("Forbindelsen er tabt - stopper testen."); break; }
-                byte[] d = reader.ReadBlocksOnce(s.Uid, 0, n);
-                log.Write("Resultat " + n + " blok(ke) på én gang: " + (d == null ? "FEJL" : "OK"));
-                if (d == null && !reader.IsOpen) break;
+                int ok = 0;
+                for (int i = 0; i < 3; i++)
+                {
+                    if (!reader.IsOpen) break;
+                    if (reader.ReadBlocksOnce(s.Uid, 0, n) != null) ok++;
+                }
+                summary.Add(n + " blok(ke) på én gang: " + ok + " af 3 OK");
+                if (!reader.IsOpen) { summary.Add("Forbindelsen er tabt - testen stoppede her."); break; }
             }
+            log.Write("----- RESULTAT -----");
+            log.Write("feusb: " + System.IO.Path.GetFileName(usb.Path) + " " + usb.DllVersion() + " (" + (Environment.Is64BitProcess ? "64" : "32") + "-bit)");
+            foreach (string line in summary) log.Write(line);
+            log.Write("Under selvtesten: " + (reader.Transfers - beforeT) + " kommandoer, " + (reader.Timeouts - beforeTo) + " timeouts");
+            log.Write("Siden start: " + reader.Stats);
             log.Write("===== SELVTEST SLUT =====");
         }
 
