@@ -157,7 +157,9 @@ namespace RFIDlibra
         private readonly FlatBtn bCancel = new FlatBtn(), bRetry = new FlatBtn();
         private readonly LinkLabel libLink = new LinkLabel();
         // Kortet med den valgte chip
-        private readonly FlatBtn bOn = new FlatBtn(), bOff = new FlatBtn(), bReset = new FlatBtn();
+        private readonly FlatBtn bOn = new FlatBtn(), bOff = new FlatBtn(), bReset = new FlatBtn(), bCopy = new FlatBtn();
+        private readonly TextBox cardNum = new TextBox();   // materialenummeret i kortet - kan markeres og kopieres
+        private string lastAutoBc;                           // nummer, der sidst blev hentet fra en chip ind i skrivefeltet
 
         private int? numUser;
         private Armed armed;
@@ -284,6 +286,15 @@ namespace RFIDlibra
             int by = CardTop + CardH - 50;
             Btn(bOn, "Alarm til", R(30, by, bw, 34), Look.Amber, Look.Ink, Color.White, Color.Empty, 9.5f, (o, e) => ChipAction("on"));
             Btn(bOff, "Alarm fra", R(30 + bw + 8, by, bw, 34), Look.Green, Color.White, Color.White, Color.Empty, 9.5f, (o, e) => ChipAction("off"));
+            Btn(bCopy, "Kopiér", R(Split - 16 - 14 - 64, CardTop + 14, 64, 26), Color.White, Look.Petrol, Color.White, Color.FromArgb(0xc5, 0xd0, 0xd2), 9f, (o, e) => CopyNumber());
+            cardNum.ReadOnly = true;
+            cardNum.BorderStyle = BorderStyle.None;
+            cardNum.BackColor = Color.White;
+            cardNum.ForeColor = Look.Ink;
+            cardNum.Font = new Font("Bahnschrift", 17f);
+            cardNum.TabStop = false;
+            cardNum.Bounds = R(38, CardTop + 12, Split - 32 - 22 - 14 - 64 - 8, 30);
+            Controls.Add(cardNum);
             Btn(bReset, "Nulstil", R(30 + 2 * (bw + 8), by, bw, 34), Color.FromArgb(0, 0, 0, 0), Look.Red, Color.White, Color.FromArgb(0xe3, 0xb4, 0xab), 9.5f, (o, e) => ChipAction("reset"));
         }
 
@@ -362,6 +373,10 @@ namespace RFIDlibra
             bReset.Enabled = chipOk && sel.Kind != "blank";
             bool show = sel != null;
             bOn.Visible = bOff.Visible = bReset.Visible = show;
+            bool hasNum = sel != null && sel.Kind == "danish" && sel.Barcode.Length > 0;
+            bCopy.Visible = cardNum.Visible = hasNum;
+            if (hasNum && cardNum.Text != sel.Barcode) cardNum.Text = sel.Barcode;
+            AutoFill();
 
             int v = PartsValue();
             bMinus.Enabled = armed == null && v > MinParts();
@@ -482,6 +497,7 @@ namespace RFIDlibra
             }
             int x = (int)r.X + Px(22), w = (int)r.Width - Px(36), y = (int)r.Y;
             bool muted = !(t.Kind == "danish" && t.Barcode.Length > 0);
+            if (!(t.Kind == "danish" && t.Barcode.Length > 0))
             using (Font f = new Font("Bahnschrift", 17f))
                 TextRenderer.DrawText(g, Look.Title(t), f, new Rectangle(x, y + Px(10), w, Px(30)), muted ? Look.InkMuted : Look.Ink,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
@@ -633,6 +649,45 @@ namespace RFIDlibra
             Tick();
         }
 
+        private void CopyNumber()
+        {
+            TagView t = Selected();
+            if (t == null || t.Barcode.Length == 0) return;
+            try { Clipboard.SetText(t.Barcode); cardMsg = "Kopieret ✓"; cardMsgOk = true; }
+            catch (Exception e) { cardMsg = "Kunne ikke kopiere: " + e.Message; cardMsgOk = false; }
+            cardMsgUntil = DateTime.Now.AddSeconds(2);
+            Invalidate();
+        }
+
+        /// <summary>
+        /// Ligger der en chip med materialenummer på læseren, kommer nummeret i skrivefeltet (markeret), og antal dele følger chippen.
+        /// Det, brugeren selv har skrevet, overskrives aldrig. Et hentet nummer forsvinder igen, når chippen tages af.
+        /// </summary>
+        private void AutoFill()
+        {
+            if (armed != null) return;
+            List<TagView> withNum = Ready().Where(t => t.Kind == "danish" && t.Barcode.Length > 0).ToList();
+            string bc = withNum.Count > 0 && withNum.Select(t => t.Barcode).Distinct().Count() == 1 ? withNum[0].Barcode : null;
+            string cur = inBarcode.Text.Trim();
+            bool typedByUser = cur.Length > 0 && cur != lastAutoBc;
+            if (bc == lastAutoBc) return;
+            if (typedByUser) { lastAutoBc = bc; return; }
+            if (bc != null)
+            {
+                inBarcode.Text = bc;
+                int n = withNum[0].Num;
+                numUser = n > 1 ? n : (int?)null;
+                if (ContainsFocus || ActiveForm == this) inBarcode.Focus();
+                inBarcode.SelectAll();
+            }
+            else if (cur == lastAutoBc)
+            {
+                inBarcode.Text = "";
+                numUser = null;
+            }
+            lastAutoBc = bc;
+        }
+
         // ---------- Biblioteksnummer ----------
 
         private bool AskLibrary()
@@ -773,7 +828,15 @@ namespace RFIDlibra
             string lib = app.Library;
             HashSet<int> used = new HashSet<int>(a.Done.Values);
             List<int> free = Enumerable.Range(1, a.Num).Where(i => !used.Contains(i)).ToList();
-            List<Job> batch = fresh.OrderBy(t => t.Uid, StringComparer.Ordinal).Select((t, i) => new Job { T = t, Seq = free[i] }).ToList();
+            // En chip, der allerede har samme materialenummer, beholder sit delnummer (så cd 1 forbliver del 1).
+            // De øvrige får de ledige numre i rækkefølge.
+            List<Job> batch = new List<Job>();
+            foreach (TagView t in fresh.OrderBy(t => t.Uid, StringComparer.Ordinal))
+                if (t.Kind == "danish" && t.Barcode == a.Barcode && free.Contains(t.Seq) && batch.All(j => j.Seq != t.Seq))
+                    batch.Add(new Job { T = t, Seq = t.Seq });
+            List<int> rest = free.Where(i => batch.All(j => j.Seq != i)).ToList();
+            foreach (TagView t in fresh.OrderBy(t => t.Uid, StringComparer.Ordinal))
+                if (batch.All(j => j.T != t)) { batch.Add(new Job { T = t, Seq = rest[0] }); rest.RemoveAt(0); }
 
             // Én bekræftelse for hele sættet, hvis nogen af chippene har andet indhold
             if (!a.Confirmed)

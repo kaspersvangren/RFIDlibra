@@ -9,7 +9,7 @@
     <LangVersion>7.3</LangVersion>
     <AssemblyName>RFIDlibra</AssemblyName>
     <RootNamespace>RFIDlibra</RootNamespace>
-    <Version>0.8.2</Version>
+    <Version>0.8.3</Version>
     <Product>RFIDlibra</Product>
     <Description>FEIG-læser til Cicero Mobile</Description>
     <ApplicationIcon>assets\RFIDlibra.ico</ApplicationIcon>

@@ -1,5 +1,6 @@
 # Ændringer
 
+- **0.8.3** – Værktøjet: materialenummeret i kortet kan markeres og kopieres, og der er en Kopiér-knap. Ligger der en chip med materialenummer på læseren, kommer nummeret markeret i skrivefeltet, og antal dele følger chippen (det, man selv har skrevet, overskrives ikke). Genprogrammeres et sæt, beholder chippene deres delnummer.
 - **0.8.2** – Virker også med den gamle Cicero (leverandør Deichman): forespørgsler uden afsender fra et program på selve pc'en godtages nu. Cicero-sandkassen (cloud-education.nonprod.cicero-lms.com) godtages også. Andre hjemmesider afvises stadig.
 - **0.8.1** – Skrankevinduet kan vises kompakt (én smal stribe med status, antal og knapperne Fra/Til; vælges med højreklik og huskes). Den normale visning er gjort mindre, og linjen "Cicero lytter ikke" er fjernet - prikken viser det. "Ét bind" hedder nu "Én del".
 - **0.8.0** – Værktøj til tags er nu et rigtigt Windows-vindue med fast størrelse og uden rullebjælke, i samme stil som skrankevinduet. Venstre side: chippene på læseren og den valgte chip (alarm til/fra, nulstil). Højre side: programmering af enkelte chips og hele sæt som i 0.7.0, med et fast felt til forløbet. Vinduet husker sin plads. Indstillinger og Fejlfinding er stadig Edge-vinduer.
