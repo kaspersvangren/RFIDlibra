@@ -577,7 +577,7 @@ function title(t) {
 }
 function labelHtml(t, tag, isNew, selected) {
   const ti = title(t);
-  const part = t.kind === "danish" ? (t.num > 1 ? "Del " + t.seq + " af " + t.num : "Ét bind") : t.maker;
+  const part = t.kind === "danish" ? (t.num > 1 ? "Del " + t.seq + " af " + t.num : "Én del") : t.maker;
   const lib = t.kind === "danish" && t.library ? t.country + "-" + t.library : "";
   const warn = t.kind === "danish" && !t.crcOk ? '<div class="warn">Kontrolsummen passer ikke</div>' : "";
   return "<" + tag + ' class="label ' + alarmClass(t) + (isNew ? " new" : "") + (selected ? " sel" : "") + '" data-mac="' + esc(t.mac) + '">' +

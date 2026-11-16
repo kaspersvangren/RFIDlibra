@@ -51,7 +51,7 @@ namespace RFIDlibra
         private static readonly Color Red = Color.FromArgb(0xdc, 0x35, 0x45);
         private static readonly Color DotGreen = Color.FromArgb(0x3c, 0xc7, 0x7a);
 
-        private const int BaseWidth = 264;
+        private const int BaseWidth = 244, CompactW = 250, CompactH = 34;
         private const int MaxLabels = 4;
 
         private readonly IWidgetSource app;
@@ -72,6 +72,10 @@ namespace RFIDlibra
         private Color flashColor;
         private DateTime flashStart = DateTime.MinValue;
         private Point savedAt;
+        private bool compact;
+        private readonly ToolStripMenuItem compactItem;
+        private readonly ToolTip tip = new ToolTip { ShowAlways = true, InitialDelay = 300, AutoPopDelay = 15000 };
+        private string tipText;
 
         public Widget(IWidgetSource app, ContextMenuStrip menu)
         {
@@ -88,6 +92,11 @@ namespace RFIDlibra
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
             using (Graphics g = CreateGraphics()) s = g.DpiX / 96f;
+            compact = AppInfo.Load("visning.txt").Trim() == "kompakt";
+            compactItem = new ToolStripMenuItem("Kompakt visning") { Checked = compact };
+            compactItem.Click += (o, e) => SetCompact(!compact);
+            menu.Items.Insert(0, new ToolStripSeparator());
+            menu.Items.Insert(0, compactItem);
             Width = Px(BaseWidth);
             Height = Px(160);
             Location = LoadPosition();
@@ -135,6 +144,16 @@ namespace RFIDlibra
             TopMost = false;
             TopMost = true;
             SavePosition();
+        }
+
+        private void SetCompact(bool on)
+        {
+            compact = on;
+            compactItem.Checked = on;
+            AppInfo.Save("visning.txt", on ? "kompakt" : "normal");
+            key = "";
+            Tick();
+            if (!OnScreen(Location)) Location = DefaultPosition();
         }
 
         public void HideWidget()
@@ -187,7 +206,7 @@ namespace RFIDlibra
 
             WidgetState n = app.GetWidgetState();
             DetectAlarmChange(n);
-            string k = n.ReaderOk + "|" + n.ReaderText + "|" + n.Listening + "|" + n.BindError + "|" + n.StaffConnect + "|" + busy + "|" + message + "|"
+            string k = compact + "|" + n.ReaderOk + "|" + n.ReaderText + "|" + n.Listening + "|" + n.BindError + "|" + n.StaffConnect + "|" + busy + "|" + message + "|"
                 + string.Join(",", n.Tags.Select(t => t.Uid + t.Kind + t.Barcode + t.Seq + "/" + t.Num + t.Afi));
             st = n;
             if (k == key) return;
@@ -239,7 +258,6 @@ namespace RFIDlibra
             if (st.BindError != null) return st.BindError;
             if (!st.ReaderOk) return st.ReaderText;
             if (st.StaffConnect) { c = Color.FromArgb(0xf5, 0xc4, 0x6b); return "staffConnect kører og kan tage læseren"; }
-            if (!st.Listening) return "Cicero lytter ikke";
             return null;
         }
 
@@ -251,6 +269,8 @@ namespace RFIDlibra
             public string Alarm;
             public string Parts = "";
             public bool PartsMissing;
+            public List<int> Missing = new List<int>();
+            public int Num;
             public Color Strip;
         }
 
@@ -292,6 +312,9 @@ namespace RFIDlibra
                     int have = g.Select(x => x.Seq).Distinct().Count();
                     it.Parts = have + " af " + t.Num + " dele";
                     it.PartsMissing = have < t.Num;
+                    it.Num = t.Num;
+                    HashSet<int> seqs = new HashSet<int>(g.Select(x => x.Seq));
+                    it.Missing = Enumerable.Range(1, t.Num).Where(i => !seqs.Contains(i)).ToList();
                 }
                 items.Add(it);
             }
@@ -299,10 +322,21 @@ namespace RFIDlibra
         }
 
         // Lodrette mål (ved 96 dpi)
-        private const int M = 10, HeadH = 34, SubH = 16, LabelH = 38, LabelGap = 4, MoreH = 20, BtnH = 34;
+        private const int M = 8, HeadH = 30, SubH = 16, LabelH = 34, LabelGap = 4, MoreH = 20, BtnH = 30;
 
         private void Arrange()
         {
+            UpdateTip();
+            if (compact)
+            {
+                btnOff = new Rectangle(Px(CompactW - 8 - 2 * 42 - 4), Px(5), Px(42), Px(24));
+                btnOn = new Rectangle(Px(CompactW - 8 - 42), Px(5), Px(42), Px(24));
+                btnMenu = Rectangle.Empty;
+                if (Width != Px(CompactW)) Width = Px(CompactW);
+                if (Height != Px(CompactH)) Height = Px(CompactH);
+                return;
+            }
+            if (Width != Px(BaseWidth)) Width = Px(BaseWidth);
             Color dummy;
             int y = HeadH + (Subline(out dummy) != null ? SubH : 0) + 2;
             int count = st.ReaderOk ? Items().Count : 0;
@@ -315,7 +349,7 @@ namespace RFIDlibra
             btnOff = new Rectangle(Px(M), Px(y), Px(bw), Px(BtnH));
             btnOn = new Rectangle(Px(M + bw + 8), Px(y), Px(bw), Px(BtnH));
             y += BtnH + M;
-            btnMenu = new Rectangle(Px(BaseWidth - 34), Px(6), Px(26), Px(22));
+            btnMenu = new Rectangle(Px(BaseWidth - 32), Px(4), Px(26), Px(22));
             int h = Px(y);
             if (Height != h) Height = h;
         }
@@ -354,12 +388,14 @@ namespace RFIDlibra
                     g.DrawEllipse(p, all.Right - Px(30) - r, all.Bottom - Px(20) - r, 2 * r, 2 * r);
                 }
 
+            if (compact) { PaintCompact(g, all); return; }
+
             // Overskrift
             Color dot;
             string head = Headline(out dot);
-            using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, Px(M + 3), Px(13), Px(9), Px(9));
+            using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, Px(M + 3), Px(11), Px(9), Px(9));
             using (Font f = new Font("Segoe UI Semibold", 10f))
-                TextRenderer.DrawText(g, head, f, new Rectangle(Px(M + 18), Px(6), Px(BaseWidth - 80), Px(24)), TextLight,
+                TextRenderer.DrawText(g, head, f, new Rectangle(Px(M + 18), Px(4), Px(BaseWidth - 76), Px(22)), TextLight,
                     TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
             // Menu-prikker
@@ -374,7 +410,7 @@ namespace RFIDlibra
             if (sub != null)
             {
                 using (Font f = new Font("Segoe UI", 8f))
-                    TextRenderer.DrawText(g, sub, f, new Rectangle(Px(M + 3), Px(y - 6), Px(BaseWidth - 2 * M - 6), Px(SubH)), subColor,
+                    TextRenderer.DrawText(g, sub, f, new Rectangle(Px(M + 3), Px(y - 5), Px(BaseWidth - 2 * M - 6), Px(SubH)), subColor,
                         TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
                 y += SubH;
             }
@@ -391,7 +427,7 @@ namespace RFIDlibra
                     TextRenderer.DrawText(g, st.ReaderOk ? "Læg en bog på læseren" : "Sæt læseren i USB", f, Rectangle.Round(r), TextMuted,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
-            using (Font num = new Font("Bahnschrift", 11.5f))
+            using (Font num = new Font("Bahnschrift", 11f))
             using (Font small = new Font("Segoe UI", 7.5f))
                 for (int i = 0; i < Math.Min(tags.Count, MaxLabels); i++)
                 {
@@ -411,6 +447,11 @@ namespace RFIDlibra
             DrawButton(g, btnOff, "Alarm fra", Green, Color.White, enabled, hover == 1, busy == 1);
             DrawButton(g, btnOn, "Alarm til", Amber, Ink, enabled, hover == 2, busy == 2);
 
+            PaintEdge(g, all);
+        }
+
+        private void PaintEdge(Graphics g, Rectangle all)
+        {
             // Kant og blink
             using (Pen p = new Pen(Edge, 1)) g.DrawRectangle(p, 0, 0, all.Width - 1, all.Height - 1);
             double ms = (DateTime.Now - flashStart).TotalMilliseconds;
@@ -420,6 +461,63 @@ namespace RFIDlibra
                 using (Pen p = new Pen(Color.FromArgb(a, flashColor), Px(4))) g.DrawRectangle(p, Px(2), Px(2), all.Width - Px(4), all.Height - Px(4));
                 using (SolidBrush b = new SolidBrush(Color.FromArgb(a / 6, flashColor))) g.FillRectangle(b, all);
             }
+        }
+
+        // ---------- Kompakt visning: én smal stribe ----------
+
+        private string CompactText(out Color dot, out Color ink)
+        {
+            ink = TextLight;
+            if (st.BindError != null) { dot = Red; return "Cicero kan ikke forbinde"; }
+            if (!st.ReaderOk) { dot = Red; return "Ingen læser"; }
+            dot = st.Listening ? DotGreen : Amber;
+            Color warn = Color.FromArgb(0xff, 0xa0, 0xa8);
+            if (message != null) { ink = warn; return message; }
+            List<Item> items = Items();
+            Item miss = items.FirstOrDefault(i => i.PartsMissing);
+            if (miss != null)
+            {
+                ink = warn;
+                return miss.Missing.Count == 1 ? "Mangler del " + miss.Missing[0] + " af " + miss.Num : "Mangler " + miss.Missing.Count + " dele";
+            }
+            if (st.StaffConnect) { ink = Color.FromArgb(0xf5, 0xc4, 0x6b); return "staffConnect kører"; }
+            if (items.Count == 0) { ink = TextMuted; return "Læseren er tom"; }
+            return items.Count + " på læseren";
+        }
+
+        private void PaintCompact(Graphics g, Rectangle all)
+        {
+            Color dot, ink;
+            string text = CompactText(out dot, out ink);
+            using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, Px(11), Px(13), Px(8), Px(8));
+            using (Font f = new Font("Segoe UI Semibold", 9.5f))
+                TextRenderer.DrawText(g, text, f, new Rectangle(Px(25), 0, btnOff.Left - Px(29), all.Height), ink,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            bool enabled = HasReadTags && busy == 0;
+            DrawButton(g, btnOff, "Fra", Green, Color.White, enabled, hover == 1, busy == 1, 9f);
+            DrawButton(g, btnOn, "Til", Amber, Ink, enabled, hover == 2, busy == 2, 9f);
+            PaintEdge(g, all);
+        }
+
+        /// <summary>I kompakt visning viser musen over striben bøgerne på læseren.</summary>
+        private void UpdateTip()
+        {
+            string t = null;
+            if (compact)
+            {
+                if (st.BindError != null) t = st.BindError;
+                else if (!st.ReaderOk) t = st.ReaderText;
+                else
+                {
+                    List<Item> items = Items();
+                    t = items.Count == 0 ? "Læg en bog på læseren" : string.Join("\n", items.Select(i => i.Title + "  –  " + i.Alarm + (i.Parts.Length > 0 ? ", " + i.Parts : "")));
+                    if (st.StaffConnect) t += "\n\nstaffConnect kører og kan tage læseren";
+                }
+                t += "\n\nHøjreklik for menuen";
+            }
+            if (t == tipText) return;
+            tipText = t;
+            tip.SetToolTip(this, t);
         }
 
         private void DrawLabel(Graphics g, Item t, RectangleF r, Font num, Font small)
@@ -433,24 +531,24 @@ namespace RFIDlibra
                 g.Clip = keep;
             }
             int x = (int)r.X + Px(16), w = (int)r.Width - Px(24);
-            TextRenderer.DrawText(g, t.Title, num, new Rectangle(x, (int)r.Y + Px(2), w, Px(21)), t.Muted ? InkMuted : Ink,
+            TextRenderer.DrawText(g, t.Title, num, new Rectangle(x, (int)r.Y + Px(1), w, Px(19)), t.Muted ? InkMuted : Ink,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-            TextRenderer.DrawText(g, t.Alarm, small, new Rectangle(x, (int)r.Y + Px(22), w, Px(14)), InkMuted,
+            TextRenderer.DrawText(g, t.Alarm, small, new Rectangle(x, (int)r.Y + Px(19), w, Px(13)), InkMuted,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             if (t.Parts.Length > 0)
                 using (Font f = t.PartsMissing ? new Font(small, FontStyle.Bold) : null)
-                    TextRenderer.DrawText(g, t.Parts, f ?? small, new Rectangle(x, (int)r.Y + Px(22), w, Px(14)), t.PartsMissing ? Color.FromArgb(0xc2, 0x3b, 0x22) : Ink,
+                    TextRenderer.DrawText(g, t.Parts, f ?? small, new Rectangle(x, (int)r.Y + Px(19), w, Px(13)), t.PartsMissing ? Color.FromArgb(0xc2, 0x3b, 0x22) : Ink,
                         TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         }
 
-        private void DrawButton(Graphics g, Rectangle r, string text, Color fill, Color ink, bool enabled, bool hot, bool working)
+        private void DrawButton(Graphics g, Rectangle r, string text, Color fill, Color ink, bool enabled, bool hot, bool working, float pt = 9.5f)
         {
             Color c = !enabled && !working ? Mix(Bg, fill, 0.35f) : hot ? Mix(fill, Color.White, 0.14f) : fill;
             Color tc = !enabled && !working ? Mix(Bg, ink, 0.55f) : ink;
             using (GraphicsPath p = Round(r, Px(5)))
             using (SolidBrush b = new SolidBrush(c)) g.FillPath(b, p);
-            using (Font f = new Font("Segoe UI Semibold", 9.5f))
-                TextRenderer.DrawText(g, working ? "Vent …" : text, f, r, tc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            using (Font f = new Font("Segoe UI Semibold", pt))
+                TextRenderer.DrawText(g, working ? (compact ? "…" : "Vent …") : text, f, r, tc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
         // ---------- Mus ----------
@@ -459,7 +557,7 @@ namespace RFIDlibra
         {
             if (btnOff.Contains(p)) return 1;
             if (btnOn.Contains(p)) return 2;
-            if (btnMenu.Contains(p)) return 3;
+            if (!btnMenu.IsEmpty && btnMenu.Contains(p)) return 3;
             return 0;
         }
 
@@ -528,7 +626,7 @@ namespace RFIDlibra
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { timer.Dispose(); flashTimer.Dispose(); }
+            if (disposing) { timer.Dispose(); flashTimer.Dispose(); tip.Dispose(); }
             base.Dispose(disposing);
         }
     }

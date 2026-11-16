@@ -18,10 +18,11 @@ staffConnect link må ikke køre samtidig på samme pc - den tager læseren. RFI
 
 Et lille vindue uden kanter, der altid ligger øverst. Det kan trækkes rundt og husker sin plads, og det tager ikke fokus fra Cicero, når man klikker på det.
 
-- Øverst: status (grøn prik = Cicero lytter, gul = Cicero lytter ikke, rød = ingen læser) og hvor mange bøger der ligger på læseren.
+- Øverst: status (grøn prik = Cicero lytter, gul = Cicero lytter ikke, fx når læsningen er slået fra i Cicero, rød = ingen læser) og hvor mange bøger der ligger på læseren.
 - Bøgerne som små etiketter med materialenummer og alarm (orange strimmel = alarm til, grøn = alarm fra). Et sæt vises som én etiket, fx "3 af 3 dele" - mangler der dele, står det med rødt.
 - **Alarm fra** og **Alarm til** slår alarmen fra eller til på alle bøger på læseren. Vinduet blinker grønt eller orange, når alarmen skifter - også når Cicero gør det.
-- Højreklik (eller klik på de tre prikker) giver menuen: **Værktøj til tags**, **Indstillinger**, **Fejlfinding**, **Skjul vinduet** og **Afslut**.
+- Højreklik (eller klik på de tre prikker) giver menuen: **Kompakt visning**, **Værktøj til tags**, **Indstillinger**, **Fejlfinding**, **Skjul vinduet** og **Afslut**.
+- **Kompakt visning** er én smal stribe: status, antal bøger og knapperne **Fra** og **Til**. Mangler der en del af et sæt, står det med rødt ("Mangler del 2 af 3"). Hold musen over striben for at se materialenumrene. Valget huskes.
 
 ## De andre vinduer
 

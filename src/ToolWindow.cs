@@ -488,7 +488,7 @@ namespace RFIDlibra
             string l1, l2;
             if (t.Kind == "danish")
             {
-                l1 = (t.Num > 1 ? "Del " + t.Seq + " af " + t.Num : "Ét bind") + (t.Library.Length > 0 ? "     " + t.Library : "");
+                l1 = (t.Num > 1 ? "Del " + t.Seq + " af " + t.Num : "Én del") + (t.Library.Length > 0 ? "     " + t.Library : "");
                 l2 = Look.AlarmWord(t.Afi) + (t.Note.Length > 0 ? "     " + t.Note : "");
             }
             else if (t.Kind == "unread") { l1 = t.Note.Length > 0 ? t.Note : "Chippen læses …"; l2 = ""; }
