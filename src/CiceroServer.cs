@@ -19,7 +19,7 @@ namespace RFIDlibra
     public sealed class CiceroServer
     {
         public const int Port = 1667;
-        public static readonly string[] AllowedOrigins = { "https://cicero.systematic.com" };
+        public static readonly string[] AllowedOrigins = { "https://cicero.systematic.com", "https://cloud-education.nonprod.cicero-lms.com" };
         private static readonly string[] LocalHosts = { "localhost", "127.0.0.1", "[::1]" };
 
         private const int MaxSseClients = 4;
@@ -196,7 +196,9 @@ namespace RFIDlibra
                     return;
                 }
 
-                if (origin == null || !AllowedOrigins.Contains(origin) || !LocalHosts.Contains(host))
+                // Hjemmesider: kun Cicero Mobile (og sandkassen). Uden afsender kommer forespørgslen fra et program
+                // på selve pc'en (fx den gamle Cicero), og det godtages - browsere sender altid en afsender.
+                if ((origin != null && !AllowedOrigins.Contains(origin.TrimEnd('/'))) || !LocalHosts.Contains(host))
                 {
                     log.Write("Afvist forespørgsel fra " + (origin ?? "ukendt afsender") + " til " + req.Path);
                     Respond(ns, 403, "text/plain", "Forbidden", null, null);
