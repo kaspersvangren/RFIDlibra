@@ -17,6 +17,8 @@ namespace RFIDlibra
         public string Barcode = "";
         public string Part = "";
         public string Library = "";
+        public string RawLibrary = "";   // uden "DK-"
+        public string Maker = "";
         public string Alarm = "";
         public string Note = "";
         public string Kind = "unread";   // blank / danish / unknown / unread
@@ -130,7 +132,7 @@ namespace RFIDlibra
 
         private static TagView View(TagState t, string note)
         {
-            TagView v = new TagView { Uid = t.Mac, Alarm = t.AlarmText, Note = note, Kind = t.Kind, Afi = t.Afi };
+            TagView v = new TagView { Uid = t.Mac, Alarm = t.AlarmText, Note = note, Kind = t.Kind, Afi = t.Afi, Maker = t.Maker };
             if (t.Content != null)
             {
                 v.Seq = t.Content.SeqNum;
@@ -138,6 +140,7 @@ namespace RFIDlibra
                 v.Barcode = t.Content.Barcode;
                 v.Part = t.Content.Part;
                 v.Library = (t.Content.Country + "-" + t.Content.Library).Trim('-');
+                v.RawLibrary = t.Content.Library;
                 if (note.Length == 0) v.Note = t.Content.CrcOk ? "" : "CRC passer ikke";
             }
             return v;

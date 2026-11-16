@@ -25,11 +25,11 @@ Et lille vindue uden kanter, der altid ligger øverst. Det kan trækkes rundt og
 
 ## De andre vinduer
 
-- **Værktøj til tags** - se en chip, slå alarmen til/fra, nulstil den, eller programmér med et materialenummer. Antal dele foreslås ud fra, hvor mange chips der ligger på læseren; det kan sættes op, men ikke under det antal. Alle chips på læseren programmeres på én gang, og mangler der dele, bliver man bedt om resten undervejs. Rækkefølgen er tilfældig, når flere skrives på én gang - skal cd 1 være del 1, lægges chippene på én ad gangen. Alarmen slås til efter programmering, og chips med indhold overskrives kun efter én bekræftelse for hele sættet.
+- **Værktøj til tags** - et fast vindue (ca. 700 × 440, kan ikke ændre størrelse, ingen rullebjælke). Til venstre chippene på læseren: klik på en for at se den, slå alarmen til/fra eller nulstille den. Til højre programmering med materialenummer. Antal dele foreslås ud fra, hvor mange chips der ligger på læseren; det kan sættes op, men ikke under det antal. Alle chips på læseren programmeres på én gang, og mangler der dele, bliver man bedt om resten undervejs. Rækkefølgen er tilfældig, når flere skrives på én gang - skal cd 1 være del 1, lægges chippene på én ad gangen. Alarmen slås til efter programmering, og chips med indhold overskrives kun efter én bekræftelse for hele sættet.
 - **Indstillinger** - biblioteksnummer til nye chips og start med Windows.
 - **Fejlfinding** - log, selvtest og "forbind igen".
 
-De tre vinduer er sider, som programmet selv viser i rene Edge-vinduer (`http://localhost:1667/app`). Kun programmet kender nøglen til sidernes funktioner.
+Indstillinger og Fejlfinding er sider, som programmet selv viser i rene Edge-vinduer (`http://localhost:1667/app`). Kun programmet kender nøglen til sidernes funktioner.
 
 ## Hvordan det virker
 

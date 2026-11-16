@@ -13,7 +13,7 @@ namespace RFIDlibra
 {
     public static class AppInfo
     {
-        public const string Version = "0.7.0";
+        public const string Version = "0.8.0";
 
         public static string DataDir
         {
@@ -42,7 +42,7 @@ namespace RFIDlibra
     /// Programmet: ikon ved uret, skrankevinduet, Cicero-serveren og læserens arbejdstråd.
     /// Værktøj, indstillinger og fejlfinding åbnes hver i sit Edge-vindue.
     /// </summary>
-    public sealed class App : ApplicationContext, IWidgetSource
+    public sealed class App : ApplicationContext, IToolBackend
     {
         public readonly Log Log = new Log();
         public Worker Worker { get; private set; }
@@ -113,7 +113,7 @@ namespace RFIDlibra
 
         private void AddPages(ContextMenuStrip m)
         {
-            m.Items.Add("Værktøj til tags", null, (s, e) => Open("vaerktoej"));
+            m.Items.Add("Værktøj til tags", null, (s, e) => OpenTool());
             m.Items.Add("Indstillinger", null, (s, e) => Open("indstillinger"));
             m.Items.Add("Fejlfinding", null, (s, e) => Open("fejlfinding"));
         }
@@ -121,6 +121,37 @@ namespace RFIDlibra
         public void Open(string page)
         {
             Launcher.OpenUi(token, page, Log);
+        }
+
+        private ToolWindow tool;
+
+        /// <summary>Åbner værktøjsvinduet (eller henter det frem, hvis det allerede er åbent).</summary>
+        public void OpenTool()
+        {
+            if (invoker.InvokeRequired) { invoker.BeginInvoke((Action)OpenTool); return; }
+            if (tool == null || tool.IsDisposed) tool = new ToolWindow(this);
+            if (!tool.Visible) tool.Show();
+            if (tool.WindowState == FormWindowState.Minimized) tool.WindowState = FormWindowState.Normal;
+            tool.Activate();
+        }
+
+        // ---------- Værktøjet ----------
+
+        public string Library { get { return library ?? ""; } }
+
+        private Worker.ToolResult OnReader(Func<Worker, Worker.ToolResult> f)
+        {
+            Worker w = Worker;
+            if (w == null || !w.Running) return Worker.ToolResult.Bad("Læseren er ikke forbundet");
+            try { return f(w) ?? Worker.ToolResult.Bad("Intet svar fra læseren"); }
+            catch (Exception e) { return Worker.ToolResult.Bad(e.Message); }
+        }
+
+        public Worker.ToolResult ToolAlarm(string mac, bool on) { return OnReader(w => w.ToolAlarm(mac, on)); }
+        public Worker.ToolResult ToolReset(string mac) { return OnReader(w => w.ToolReset(mac)); }
+        public Worker.ToolResult ToolProgram(string mac, string barcode, int seq, int num, string lib, bool confirmed)
+        {
+            return OnReader(w => w.ToolProgram(mac, barcode, seq, num, lib, confirmed));
         }
 
         /// <summary>Viser skrankevinduet (kan kaldes fra alle tråde, fx når programmet startes igen).</summary>
@@ -341,6 +372,7 @@ namespace RFIDlibra
             server.Stop();
             tray.Visible = false;
             tray.Dispose();
+            if (tool != null && !tool.IsDisposed) tool.Close();
             widget.Close();
             ExitThread();
         }
