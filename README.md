@@ -41,5 +41,6 @@ Indstillinger og Fejlfinding er sider, som programmet selv viser i rene Edge-vin
 - Mod Cicero svarer programmet som Deichmans [go-feig](https://github.com/digibib/go-feig) på localhost:1667 (HTTP + server-sent events).
 - Tagindholdet læses og skrives efter den danske datamodel, som i NFClibra og go-feig. Alt, der skrives, kontrolleres ved at læse tagget igen. Lås-kommandoer kan ikke sendes.
 - PR101 med firmware 1.7 taber af og til et svar på USB (det gør den også med Bibliothecas software). RFIDlibra venter kort på svar og prøver straks igen - op til 3 gange på samme forbindelse, derefter efter en genåbning.
+- PR101/MR101 (firmware 1.x) når ikke at skrive alle 8 blokke på en chip i ét hug - de stopper efter blok 4. Derfor skriver RFIDlibra blok for blok på dem, med kontrolsummen (blok 4 og 5) sidst, så en halvt skrevet chip altid ses som ugyldig. Alt skrevet kontrolleres ved at læse chippen igen.
 
 Logfiler: `%LOCALAPPDATA%\RFIDlibra\log` (gemmes i 14 dage).

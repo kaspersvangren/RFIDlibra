@@ -70,6 +70,7 @@ namespace RFIDlibra
             }
             handle = h;
             appliedTimeout = -1;
+            FirmwareMajor = 0;
             DeviceName = usb.ScanListPara("DeviceName");
             Family = usb.ScanListPara("FamilyName");
             DeviceId = usb.ScanListPara("Device-ID");
@@ -88,6 +89,7 @@ namespace RFIDlibra
                     if (r != null && r.Status == 0x00 && r.Data.Length >= 2)
                     {
                         Firmware = r.Data[0] + "." + r.Data[1];
+                        FirmwareMajor = r.Data[0];
                         log.Write("Læseren svarer: " + (adv ? "Advanced" : "Standard") + "-rammer, adresse 0x" + adr.ToString("X2")
                             + ", firmware " + Firmware + " (data: " + Protocol.Hex(r.Data) + ")");
                         return true;
@@ -438,6 +440,23 @@ namespace RFIDlibra
         /// <summary>Ventetid og forsøg ved skrivning: længere ventetid og færre forsøg tæt efter hinanden, så kommandoer ikke hober sig op.</summary>
         public int WriteWaitMs = 1000;
         private const int WriteSameTries = 2, WriteReopenTries = 1;
+        /// <summary>Én blok svarer på ca. 16 ms, så her kan der ventes kortere og prøves flere gange.</summary>
+        public int BlockWaitMs = 300;
+        private const int BlockSameTries = 3, BlockReopenTries = 1;
+
+        /// <summary>Hovedversion af firmwaren (1 på PR101/MR101, 2 på MR102). 0 = ukendt.</summary>
+        public int FirmwareMajor { get; private set; }
+        /// <summary>Læsere, hvor skrivning af alle 8 blokke på én gang har slået fejl i denne kørsel.</summary>
+        private readonly HashSet<string> multiBlockFails = new HashSet<string>();
+
+        /// <summary>
+        /// Firmware 1.x (PR101/MR101) når ikke at skrive 8 blokke i ét hug - den stopper efter blok 4 og svarer ikke.
+        /// Så der skrives blok for blok med det samme. Det samme gælder en læser, hvor det er slået fejl før.
+        /// </summary>
+        private bool BlockByBlockOnly
+        {
+            get { return (FirmwareMajor > 0 && FirmwareMajor < 2) || multiBlockFails.Contains(DeviceId ?? ""); }
+        }
 
         private static byte[] BlockData(byte[] data32, int first, int count)
         {
@@ -453,7 +472,7 @@ namespace RFIDlibra
 
         /// <summary>
         /// Skriver blok 0-7 (32 bytes) og læser dem igen for at kontrollere dem.
-        /// Først prøves alle 8 blokke på én gang (2 gange). Lykkes det ikke, skrives der blok for blok,
+        /// På nyere læsere prøves alle 8 blokke på én gang (2 gange). Ellers - eller hvis det ikke lykkes - skrives der blok for blok,
         /// med blok 4 og 5 sidst: de indeholder kontrolsummen, så en chip, der kun er skrevet halvt, altid ses som ugyldig.
         /// </summary>
         public bool WriteDanish(byte[] uid, byte[] data32, out string error)
@@ -461,17 +480,27 @@ namespace RFIDlibra
             error = null;
             if (data32 == null || data32.Length != 32) { error = "forkert datalængde"; return false; }
             string m;
-            for (int i = 1; i <= 2; i++)
+            bool multiTried = false;
+            if (BlockByBlockOnly)
             {
-                Protocol.Response r = Send(Protocol.CMD_ISO, Addressed(Protocol.ISO_WRITE_BLOCKS, uid, BlockData(data32, 0, 8)), "skriv blok 0-7",
-                    WriteWaitMs, WriteSameTries, WriteReopenTries);
-                if (r != null && r.Status != 0x00) { error = "læseren svarede " + Protocol.StatusText(r.Status); log.Write("  skriv blok 0-7: " + error); }
-                byte[] check = ReadDanish(uid, out m);
-                if (check != null && BytesEqual(check, data32)) return true;
-                if (check != null) error = "kontrol-læsningen viste andre data";
-                else if (error == null) error = "kunne ikke kontrollere det skrevne";
-                if (!IsOpen) return false;
-                log.Write("  Skrivningen blev ikke bekræftet (" + error + ")" + (i < 2 ? " - prøver igen." : " - skriver nu blok for blok."));
+                log.Write("  Skriver blok for blok (" + (FirmwareMajor > 0 && FirmwareMajor < 2 ? "firmware " + Firmware : "8 blokke på én gang slog fejl før på denne læser") + ").");
+            }
+            else
+            {
+                multiTried = true;
+                for (int i = 1; i <= 2; i++)
+                {
+                    Protocol.Response r = Send(Protocol.CMD_ISO, Addressed(Protocol.ISO_WRITE_BLOCKS, uid, BlockData(data32, 0, 8)), "skriv blok 0-7",
+                        WriteWaitMs, WriteSameTries, WriteReopenTries);
+                    if (r != null && r.Status != 0x00) { error = "læseren svarede " + Protocol.StatusText(r.Status); log.Write("  skriv blok 0-7: " + error); }
+                    byte[] check = ReadDanish(uid, out m);
+                    if (check != null && BytesEqual(check, data32)) return true;
+                    if (check != null) error = "kontrol-læsningen viste andre data";
+                    else if (error == null) error = "kunne ikke kontrollere det skrevne";
+                    if (!IsOpen) return false;
+                    log.Write("  Skrivningen blev ikke bekræftet (" + error + ")" + (i < 2 ? " - prøver igen." : " - skriver nu blok for blok."));
+                }
+                error = null;
             }
 
             // Blok for blok, kontrolsummen (blok 4 og 5) sidst. Blokke, der allerede er rigtige, springes over.
@@ -479,6 +508,7 @@ namespace RFIDlibra
             for (int round = 1; round <= 2 && IsOpen; round++)
             {
                 byte[] now = ReadDanish(uid, out m);
+                int written = 0;
                 foreach (int blk in order)
                 {
                     if (!IsOpen) break;
@@ -486,14 +516,18 @@ namespace RFIDlibra
                     for (int k = 0; k < 4 && same; k++) same = now[blk * 4 + k] == data32[blk * 4 + k];
                     if (same) continue;
                     Protocol.Response r = Send(Protocol.CMD_ISO, Addressed(Protocol.ISO_WRITE_BLOCKS, uid, BlockData(data32, blk, 1)), "skriv blok " + blk,
-                        WriteWaitMs, WriteSameTries, WriteReopenTries);
+                        BlockWaitMs, BlockSameTries, BlockReopenTries);
                     if (r == null) { error = "blok " + blk + " blev ikke skrevet"; break; }
                     if (r.Status != 0x00) { error = "blok " + blk + ": læseren svarede " + Protocol.StatusText(r.Status); log.Write("  " + error); break; }
+                    written++;
                 }
                 byte[] check = ReadDanish(uid, out m);
                 if (check != null && BytesEqual(check, data32))
                 {
-                    log.Write("  Skrevet blok for blok og bekræftet.");
+                    log.Write("  Skrevet blok for blok (" + written + " blokke) og bekræftet.");
+                    error = null;
+                    if (multiTried && DeviceId != null && multiBlockFails.Add(DeviceId))
+                        log.Write("  Denne læser skriver herefter blok for blok med det samme.");
                     return true;
                 }
                 if (check != null) error = "kontrol-læsningen viste andre data";
