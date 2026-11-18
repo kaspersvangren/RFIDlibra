@@ -176,6 +176,8 @@ namespace RFIDlibra
                             RunJobs(3000);
                             continue;
                         }
+                        SetStatus("Læser læserens indstillinger ...");
+                        reader.LogConfiguration();
                         baseStatus = reader.DeviceName + ", firmware " + reader.Firmware;
                         ReaderName = baseStatus;
                         SetStatus("Læseren er klar");

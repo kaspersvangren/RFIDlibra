@@ -14,6 +14,8 @@ namespace RFIDlibra
     {
         public const byte CMD_SW_VERSION = 0x65;
         public const byte CMD_ISO = 0xB0;
+        /// <summary>Læs konfiguration (kun læsning). 0x81 (skriv konfiguration) sendes aldrig.</summary>
+        public const byte CMD_READ_CFG = 0x80;
 
         public const byte ISO_INVENTORY = 0x01;
         public const byte ISO_READ_BLOCKS = 0x23;

@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -59,6 +60,7 @@ namespace RFIDlibra
         /// <summary>Finder og åbner læseren og finder ud af, hvilket rammeformat den taler.</summary>
         public bool Open()
         {
+            if (minute.Count > 0) WriteMinuteStats();   // statistik for den læser, der lige er forsvundet
             Close();
             int h = usb.ScanAndOpenFirst();
             if (h <= 0)
@@ -136,17 +138,26 @@ namespace RFIDlibra
         /// </summary>
         public Protocol.Response Send(byte cmd, byte[] data, string what)
         {
+            return Send(cmd, data, what, 0, SameHandleTries, AfterReopenTries);
+        }
+
+        /// <summary>Som Send, men med egen ventetid (0 = standard) og eget antal forsøg.</summary>
+        public Protocol.Response Send(byte cmd, byte[] data, string what, int timeoutMs, int sameTries, int reopenTries)
+        {
             if (!IsOpen) return null;
+            if (cmd == 0x81) throw new InvalidOperationException("Læserens konfiguration ændres aldrig");
             if (cmd == Protocol.CMD_ISO && (data == null || data.Length == 0 || Array.IndexOf(Protocol.AllowedIso, data[0]) < 0))
                 throw new InvalidOperationException("ISO-kommando er ikke tilladt");
             byte iso = cmd == Protocol.CMD_ISO ? data[0] : (byte)0;
             // Inventory tager længere tid, jo flere tags der ligger på læseren: ventetiden følger med (mindst 300 ms)
-            int timeout = iso == Protocol.ISO_INVENTORY ? (int)Math.Min(2000, Math.Max(InventoryTimeoutMs, lastInventoryMs * 2))
+            int timeout = timeoutMs > 0 ? timeoutMs
+                : iso == Protocol.ISO_INVENTORY ? (int)Math.Min(2000, Math.Max(InventoryTimeoutMs, lastInventoryMs * 2))
                 : iso == Protocol.ISO_WRITE_BLOCKS ? WriteTimeoutMs
                 : TimeoutMs;
+            string kind = Kind(cmd, iso);
             byte[] frame = Protocol.Build(Advanced, Address, cmd, data);
             Stopwatch total = Stopwatch.StartNew();
-            int maxTries = SameHandleTries + AfterReopenTries;
+            int maxTries = sameTries + reopenTries;
             for (int attempt = 1; attempt <= maxTries; attempt++)
             {
                 if (!IsOpen) break;
@@ -173,9 +184,10 @@ namespace RFIDlibra
                     }
                     if (!r.CrcOk) log.Write("  " + what + ": advarsel - CRC i svaret passer ikke.");
                     if (iso == Protocol.ISO_INVENTORY) lastInventoryMs = ms;
+                    Count(kind, attempt, ms, false);
                     if (attempt > 1)
                     {
-                        if (attempt <= SameHandleTries) RescuedSameHandle++; else RescuedReopen++;
+                        if (attempt <= sameTries) RescuedSameHandle++; else RescuedReopen++;
                     }
                     LastMs = total.ElapsedMilliseconds;
                     if (attempt > 1) log.Write("  " + what + ": reddet ved forsøg " + attempt + " (i alt " + LastMs + " ms)");
@@ -196,12 +208,87 @@ namespace RFIDlibra
                 Timeouts++;
                 // Mange tags på læseren kan gøre inventory langsommere end ventetiden: giv næste forsøg længere tid
                 if (iso == Protocol.ISO_INVENTORY) timeout = Math.Min(2000, timeout * 2);
-                if (attempt == SameHandleTries) Reopen();
+                if (attempt == sameTries) Reopen();
             }
             GaveUp++;
+            Count(kind, maxTries, 0, true);
             LastMs = total.ElapsedMilliseconds;
             log.Write("  " + what + ": opgivet (i alt " + LastMs + " ms)");
             return null;
+        }
+
+        // ---------- Statistik pr. slags kommando (skrives i loggen hvert minut) ----------
+
+        private sealed class KindStats { public int Calls, LostFirst, Retries, GaveUp; public long Ms; public int Ok; public long MaxMs; }
+        private readonly Dictionary<string, KindStats> minute = new Dictionary<string, KindStats>();
+        private readonly Stopwatch minuteClock = Stopwatch.StartNew();
+
+        private static string Kind(byte cmd, byte iso)
+        {
+            if (cmd == Protocol.CMD_ISO)
+                switch (iso)
+                {
+                    case Protocol.ISO_INVENTORY: return "inventory";
+                    case Protocol.ISO_READ_BLOCKS: return "læs blokke";
+                    case Protocol.ISO_WRITE_BLOCKS: return "skriv blokke";
+                    case Protocol.ISO_WRITE_AFI: return "skriv alarm";
+                    case Protocol.ISO_SYSINFO: return "systeminfo";
+                }
+            if (cmd == Protocol.CMD_SW_VERSION) return "softwareversion";
+            if (cmd == Protocol.CMD_READ_CFG) return "læs konfiguration";
+            return "kommando 0x" + cmd.ToString("X2");
+        }
+
+        private void Count(string kind, int attempt, long ms, bool gaveUp)
+        {
+            KindStats k;
+            if (!minute.TryGetValue(kind, out k)) minute[kind] = k = new KindStats();
+            k.Calls++;
+            if (attempt > 1) { k.LostFirst++; k.Retries += attempt - 1; }
+            if (gaveUp) k.GaveUp++;
+            else { k.Ok++; k.Ms += ms; if (ms > k.MaxMs) k.MaxMs = ms; }
+            if (minuteClock.ElapsedMilliseconds >= 60000) WriteMinuteStats();
+        }
+
+        /// <summary>Skriver sidste minuts statistik i loggen, så læsere kan sammenlignes.</summary>
+        public void WriteMinuteStats()
+        {
+            minuteClock.Restart();
+            if (minute.Count == 0) return;
+            StringBuilder sb = new StringBuilder("Statistik sidste minut (" + DeviceName + ", firmware " + Firmware + "): ");
+            bool first = true;
+            foreach (KeyValuePair<string, KindStats> e in minute)
+            {
+                KindStats k = e.Value;
+                if (!first) sb.Append("; ");
+                first = false;
+                sb.Append(e.Key).Append(' ').Append(k.Calls).Append(" kald, ")
+                  .Append((100.0 * k.LostFirst / k.Calls).ToString("0")).Append(" % tabt første gang");
+                if (k.GaveUp > 0) sb.Append(", ").Append(k.GaveUp).Append(" opgivet");
+                if (k.Ok > 0) sb.Append(", svar ").Append(k.Ms / k.Ok).Append(" ms i snit (højst ").Append(k.MaxMs).Append(")");
+            }
+            log.Write(sb.ToString());
+            minute.Clear();
+        }
+
+        private static readonly HashSet<string> configLogged = new HashSet<string>();
+
+        /// <summary>
+        /// Skriver læserens indstillinger i loggen (én gang pr. læser pr. kørsel), så forskellige læsere kan sammenlignes.
+        /// Bruger kun "læs konfiguration" (0x80) - der ændres intet.
+        /// </summary>
+        public void LogConfiguration()
+        {
+            if (!IsOpen || configLogged.Contains(DeviceId ?? "")) return;
+            configLogged.Add(DeviceId ?? "");
+            log.Write("Læserens indstillinger (kun læst, intet ændres) for " + DeviceName + ", firmware " + Firmware + ":");
+            for (int blk = 0; blk < 16 && IsOpen; blk++)
+            {
+                Protocol.Response r = Send(Protocol.CMD_READ_CFG, new byte[] { (byte)blk }, "læs konfiguration " + blk);
+                if (r == null) log.Write("  konfiguration " + blk + ": intet svar");
+                else if (r.Status != 0x00) log.Write("  konfiguration " + blk + ": " + Protocol.StatusText(r.Status));
+                else log.Write("  konfiguration " + blk + ": " + Protocol.Hex(r.Data));
+            }
         }
 
         /// <summary>Genåbner USB-forbindelsen (rydder op efter et tabt svar).</summary>
@@ -348,30 +435,72 @@ namespace RFIDlibra
             return false;
         }
 
-        /// <summary>Skriver blok 0-7 (32 bytes) og læser dem igen for at kontrollere dem. Prøver op til 3 gange.</summary>
+        /// <summary>Ventetid og forsøg ved skrivning: længere ventetid og færre forsøg tæt efter hinanden, så kommandoer ikke hober sig op.</summary>
+        public int WriteWaitMs = 1000;
+        private const int WriteSameTries = 2, WriteReopenTries = 1;
+
+        private static byte[] BlockData(byte[] data32, int first, int count)
+        {
+            byte[] extra = new byte[3 + count * 4];
+            extra[0] = (byte)first;
+            extra[1] = (byte)count;
+            extra[2] = 0x04; // bytes pr. blok
+            for (int blk = 0; blk < count; blk++)
+                for (int k = 0; k < 4; k++)
+                    extra[3 + blk * 4 + k] = data32[(first + blk) * 4 + 3 - k]; // FEIG vil have hver blok i omvendt rækkefølge
+            return extra;
+        }
+
+        /// <summary>
+        /// Skriver blok 0-7 (32 bytes) og læser dem igen for at kontrollere dem.
+        /// Først prøves alle 8 blokke på én gang (2 gange). Lykkes det ikke, skrives der blok for blok,
+        /// med blok 4 og 5 sidst: de indeholder kontrolsummen, så en chip, der kun er skrevet halvt, altid ses som ugyldig.
+        /// </summary>
         public bool WriteDanish(byte[] uid, byte[] data32, out string error)
         {
             error = null;
             if (data32 == null || data32.Length != 32) { error = "forkert datalængde"; return false; }
-            byte[] extra = new byte[3 + 32];
-            extra[0] = 0x00; // første blok
-            extra[1] = 0x08; // antal blokke
-            extra[2] = 0x04; // bytes pr. blok
-            for (int blk = 0; blk < 8; blk++)
-                for (int k = 0; k < 4; k++)
-                    extra[3 + blk * 4 + k] = data32[blk * 4 + 3 - k]; // FEIG vil have hver blok i omvendt rækkefølge
-            for (int i = 1; i <= 3; i++)
+            string m;
+            for (int i = 1; i <= 2; i++)
             {
-                Protocol.Response r = Send(Protocol.CMD_ISO, Addressed(Protocol.ISO_WRITE_BLOCKS, uid, extra), "skriv blok 0-7");
-                if (r != null && r.Status != 0x00) error = "læseren svarede " + Protocol.StatusText(r.Status);
-                string m;
+                Protocol.Response r = Send(Protocol.CMD_ISO, Addressed(Protocol.ISO_WRITE_BLOCKS, uid, BlockData(data32, 0, 8)), "skriv blok 0-7",
+                    WriteWaitMs, WriteSameTries, WriteReopenTries);
+                if (r != null && r.Status != 0x00) { error = "læseren svarede " + Protocol.StatusText(r.Status); log.Write("  skriv blok 0-7: " + error); }
                 byte[] check = ReadDanish(uid, out m);
                 if (check != null && BytesEqual(check, data32)) return true;
                 if (check != null) error = "kontrol-læsningen viste andre data";
                 else if (error == null) error = "kunne ikke kontrollere det skrevne";
-                if (!IsOpen) break;
-                log.Write("  Skrivningen blev ikke bekræftet (" + error + ") - prøver igen.");
+                if (!IsOpen) return false;
+                log.Write("  Skrivningen blev ikke bekræftet (" + error + ")" + (i < 2 ? " - prøver igen." : " - skriver nu blok for blok."));
             }
+
+            // Blok for blok, kontrolsummen (blok 4 og 5) sidst. Blokke, der allerede er rigtige, springes over.
+            int[] order = { 0, 1, 2, 3, 6, 7, 4, 5 };
+            for (int round = 1; round <= 2 && IsOpen; round++)
+            {
+                byte[] now = ReadDanish(uid, out m);
+                foreach (int blk in order)
+                {
+                    if (!IsOpen) break;
+                    bool same = now != null;
+                    for (int k = 0; k < 4 && same; k++) same = now[blk * 4 + k] == data32[blk * 4 + k];
+                    if (same) continue;
+                    Protocol.Response r = Send(Protocol.CMD_ISO, Addressed(Protocol.ISO_WRITE_BLOCKS, uid, BlockData(data32, blk, 1)), "skriv blok " + blk,
+                        WriteWaitMs, WriteSameTries, WriteReopenTries);
+                    if (r == null) { error = "blok " + blk + " blev ikke skrevet"; break; }
+                    if (r.Status != 0x00) { error = "blok " + blk + ": læseren svarede " + Protocol.StatusText(r.Status); log.Write("  " + error); break; }
+                }
+                byte[] check = ReadDanish(uid, out m);
+                if (check != null && BytesEqual(check, data32))
+                {
+                    log.Write("  Skrevet blok for blok og bekræftet.");
+                    return true;
+                }
+                if (check != null) error = "kontrol-læsningen viste andre data";
+                else if (error == null) error = "kunne ikke kontrollere det skrevne";
+                log.Write("  Blok for blok blev ikke bekræftet (" + error + ")" + (round < 2 ? " - prøver igen." : "."));
+            }
+            error = (error ?? "skrivningen mislykkedes") + ". Chippen kan være delvist skrevet - den ses så som ugyldig. Programmér den igen.";
             return false;
         }
 
