@@ -9,7 +9,9 @@ namespace RFIDlibra
 {
     /// <summary>
     /// Tynd indpakning af FEIG's feusb.dll (USB-delen af FEIG's SDK).
-    /// Vi bruger filer, Bibliotheca allerede har installeret, og leverer dem ikke selv.
+    /// RFIDlibra har FEIG's egen feusb.dll (64-bit, version 6.0.0.0, fra FEIG's ID USB-driverpakke v3.26) med indbygget
+    /// og pakker den ud i sin egen mappe første gang. FEIG's licens til driverpakken tillader brug og videregivelse
+    /// uden licensgebyr, så længe den kun bruges til FEIG's egne læsere (H70700, §1.4). Filen er uændret (§2).
     /// Funktionerne findes med GetProcAddress, så vi selv kan vælge, hvilken feusb.dll der indlæses
     /// (fx den gamle 5.0 eller FeUsbOLD 4.2.6 fra den gamle Bibliotheca-software).
     /// FEIG erklærer funktionerne som CALLBACK (stdcall); på 64-bit er der kun én kaldkonvention.
@@ -117,6 +119,7 @@ namespace RFIDlibra
             string desk = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             string exeDir = AppDomain.CurrentDomain.BaseDirectory;
             yield return exeDir;
+            yield return BundledFallbackDir;
             yield return System.IO.Path.Combine(exeDir, "RFIDIF");
             if (!string.IsNullOrEmpty(desk))
             {
@@ -127,6 +130,66 @@ namespace RFIDlibra
             yield return System.IO.Path.Combine(pf86, @"bibliotheca\Common\TagManager(PM)\x86");
             yield return System.IO.Path.Combine(pf86, @"Bibliotheca RFID\RFIDIF");
             yield return System.IO.Path.Combine(pf86, @"Bibliotheca RFID\RFIDIFServer");
+        }
+
+        // ---------- FEIG's feusb.dll, der følger med RFIDlibra ----------
+
+        private const string BundledResource = "feusb-x64.dll";
+        private const string BundledSha256 = "6bf4f3e405fbc6027aa30c63079c03433f92bb92cfcb27f580aeec0ea9126aea";
+
+        /// <summary>Hvis programmets mappe ikke må skrives i (fx et fællesdrev), lægges filen her.</summary>
+        public static string BundledFallbackDir
+        {
+            get { return System.IO.Path.Combine(AppInfo.DataDir, "feig"); }
+        }
+
+        private static string Sha256(byte[] data)
+        {
+            using (System.Security.Cryptography.SHA256 h = System.Security.Cryptography.SHA256.Create())
+                return BitConverter.ToString(h.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+        }
+
+        /// <summary>
+        /// Pakker FEIG's feusb.dll ud ved siden af programmet (eller i datamappen), hvis der ikke allerede ligger en.
+        /// En fil, der allerede ligger der, røres aldrig. Den udpakkede fil kontrolleres mod sin kendte SHA-256.
+        /// Returnerer stien til den udpakkede fil, eller null.
+        /// </summary>
+        public static string EnsureBundled(Log log)
+        {
+            if (!Environment.Is64BitProcess) return null;
+            byte[] data;
+            using (Stream st = typeof(Feusb).Assembly.GetManifestResourceStream(BundledResource))
+            {
+                if (st == null) return null;
+                using (MemoryStream ms = new MemoryStream()) { st.CopyTo(ms); data = ms.ToArray(); }
+            }
+            if (Sha256(data) != BundledSha256) { log.Write("FEJL: den indbyggede feusb.dll har ikke den forventede kontrolsum - bruges ikke."); return null; }
+
+            string[] dirs = { AppDomain.CurrentDomain.BaseDirectory, BundledFallbackDir };
+            foreach (string dir in dirs)
+            {
+                string existing = System.IO.Path.Combine(dir, "feusb.dll");
+                if (File.Exists(existing)) return existing;   // der ligger allerede en - den bruges, som den er
+            }
+            foreach (string dir in dirs)
+            {
+                string target = System.IO.Path.Combine(dir, "feusb.dll");
+                try
+                {
+                    Directory.CreateDirectory(dir);
+                    string tmp = target + ".ny";
+                    File.WriteAllBytes(tmp, data);
+                    if (Sha256(File.ReadAllBytes(tmp)) != BundledSha256) { File.Delete(tmp); continue; }
+                    File.Move(tmp, target);
+                    log.Write("FEIG's feusb.dll er lagt i " + dir);
+                    return target;
+                }
+                catch (Exception e)
+                {
+                    log.Write("Kunne ikke lægge feusb.dll i " + dir + ": " + e.Message);
+                }
+            }
+            return null;
         }
 
         public static List<Candidate> FindCandidates(string extra)

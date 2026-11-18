@@ -1,5 +1,6 @@
 # Ændringer
 
+- **0.8.4** – FEIG's egen `feusb.dll` (64-bit, v6.0.0.0 fra FEIG's ID USB-driverpakke v3.26) er bygget ind og lægges ved siden af programmet første gang (eller i `%LOCALAPPDATA%\RFIDlibra\feig`, hvis mappen ikke må skrives i). Filen kontrolleres mod sin kendte SHA-256. Bibliothecas software er derfor ikke længere nødvendig - kun FEIG's USB-driver.
 - **0.8.3** – Værktøjet: materialenummeret i kortet kan markeres og kopieres, og der er en Kopiér-knap. Ligger der en chip med materialenummer på læseren, kommer nummeret markeret i skrivefeltet, og antal dele følger chippen (det, man selv har skrevet, overskrives ikke). Genprogrammeres et sæt, beholder chippene deres delnummer.
 - **0.8.2** – Virker også med den gamle Cicero (leverandør Deichman): forespørgsler uden afsender fra et program på selve pc'en godtages nu. Cicero-sandkassen (cloud-education.nonprod.cicero-lms.com) godtages også. Andre hjemmesider afvises stadig.
 - **0.8.1** – Skrankevinduet kan vises kompakt (én smal stribe med status, antal og knapperne Fra/Til; vælges med højreklik og huskes). Den normale visning er gjort mindre, og linjen "Cicero lytter ikke" er fjernet - prikken viser det. "Ét bind" hedder nu "Én del".

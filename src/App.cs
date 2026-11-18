@@ -13,7 +13,7 @@ namespace RFIDlibra
 {
     public static class AppInfo
     {
-        public const string Version = "0.8.3";
+        public const string Version = "0.8.4";
 
         public static string DataDir
         {
@@ -200,13 +200,14 @@ namespace RFIDlibra
             {
                 try
                 {
+                    Feusb.EnsureBundled(Log);
                     string saved = AppInfo.Load("feusb.txt");
                     List<Feusb.Candidate> found = Feusb.FindCandidates(saved);
                     Feusb.Candidate chosen = found.FirstOrDefault(c => c.Usable && saved.Length > 0 && string.Equals(c.Path, saved, StringComparison.OrdinalIgnoreCase))
                         ?? found.FirstOrDefault(c => c.Usable);
                     if (chosen == null)
                     {
-                        usbError = "FEIG's feusb.dll blev ikke fundet. Bibliothecas Tag Manager skal være installeret.";
+                        usbError = "FEIG's feusb.dll blev ikke fundet. Læg feusb.dll (64-bit) fra FEIG's driverpakke ved siden af RFIDlibra.exe.";
                         Log.Write("FEJL: " + usbError);
                         return;
                     }
