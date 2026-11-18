@@ -1,7 +1,10 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace RFIDlibra
 {
@@ -41,9 +44,72 @@ namespace RFIDlibra
             return null;
         }
 
-        /// <summary>Edge i "app"-tilstand: et almindeligt vindue uden adresselinje og faner. Ellers standardbrowseren.</summary>
+        // ---------- Kun ét vindue pr. side ----------
+
+        [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int max);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int cmd);
+        [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        /// <summary>Vinduestitlerne, siderne sætter selv (ui/index.html: "RFIDlibra – " + sidens navn).</summary>
+        private static string PageTitle(string page)
+        {
+            switch (page)
+            {
+                case "indstillinger": return "RFIDlibra – Indstillinger";
+                case "fejlfinding": return "RFIDlibra – Fejlfinding";
+                case "vaerktoej": return "RFIDlibra – Værktøj til tags";
+                case "laeser": return "RFIDlibra – På læseren";
+                default: return null;
+            }
+        }
+
+        private static readonly Dictionary<string, DateTime> lastLaunch = new Dictionary<string, DateTime>();
+
+        /// <summary>Finder et åbent Edge-vindue med sidens titel og henter det frem. true hvis det fandtes.</summary>
+        private static bool BringToFront(string page)
+        {
+            string title = PageTitle(page);
+            if (title == null) return false;
+            IntPtr found = IntPtr.Zero;
+            try
+            {
+                EnumWindows((h, l) =>
+                {
+                    if (!IsWindowVisible(h)) return true;
+                    StringBuilder cls = new StringBuilder(64);
+                    GetClassName(h, cls, cls.Capacity);
+                    if (!cls.ToString().StartsWith("Chrome_WidgetWin")) return true;   // Edge-vinduer
+                    StringBuilder t = new StringBuilder(256);
+                    GetWindowText(h, t, t.Capacity);
+                    if (!t.ToString().StartsWith(title)) return true;
+                    found = h;
+                    return false;
+                }, IntPtr.Zero);
+            }
+            catch (Exception) { return false; }   // fx uden for Windows
+            if (found == IntPtr.Zero) return false;
+            if (IsIconic(found)) ShowWindow(found, 9);   // SW_RESTORE
+            SetForegroundWindow(found);
+            return true;
+        }
+
+        /// <summary>
+        /// Edge i "app"-tilstand: et almindeligt vindue uden adresselinje og faner. Ellers standardbrowseren.
+        /// Er siden allerede åben, hentes det vindue frem i stedet for at åbne et nyt.
+        /// </summary>
         public static void OpenUi(string token, string page, Log log)
         {
+            string key = page ?? "";
+            if (BringToFront(page)) return;
+            DateTime last;
+            // Lige åbnet, men siden har ikke nået at sætte sin titel endnu: åbn ikke en til
+            if (lastLaunch.TryGetValue(key, out last) && (DateTime.Now - last).TotalSeconds < 4) return;
+            lastLaunch[key] = DateTime.Now;
             string url = UiUrl(token, page);
             try
             {

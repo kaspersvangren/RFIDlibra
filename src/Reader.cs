@@ -219,6 +219,37 @@ namespace RFIDlibra
             return null;
         }
 
+        /// <summary>
+        /// Ét enkelt forsøg uden nye forsøg og uden genåbning - kun til selvtesten, der måler hvor mange kommandoer der tabes.
+        /// Returnerer svaret, eller null hvis det blev tabt.
+        /// </summary>
+        public Protocol.Response SendOnce(byte cmd, byte[] data, int timeoutMs, out byte[] frameSent)
+        {
+            frameSent = null;
+            if (!IsOpen) return null;
+            if (cmd == 0x81) throw new InvalidOperationException("Læserens konfiguration ændres aldrig");
+            if (cmd == Protocol.CMD_ISO && (data == null || data.Length == 0 || data[0] != Protocol.ISO_READ_BLOCKS))
+                throw new InvalidOperationException("Selvtesten må kun læse");
+            byte[] frame = Protocol.Build(Advanced, Address, cmd, data);
+            frameSent = frame;
+            ApplyTimeout(timeoutMs);
+            long wait = GapMs - sinceLast.ElapsedMilliseconds;
+            if (wait > 0) System.Threading.Thread.Sleep((int)wait);
+            int err;
+            byte[] rec = usb.Transceive(handle, frame, out err);
+            sinceLast.Restart();
+            Transfers++;
+            if (rec == null)
+            {
+                if (err != Feusb.ERR_TIMEOUT) { log.Write("  USB-fejl " + usb.ErrorText(err) + " - forbindelsen er tabt."); Close(); }
+                else Timeouts++;
+                return null;
+            }
+            Protocol.Response r = Protocol.Parse(rec);
+            if (r == null || r.Cmd != cmd) { Reopen(); return null; }
+            return r;
+        }
+
         // ---------- Statistik pr. slags kommando (skrives i loggen hvert minut) ----------
 
         private sealed class KindStats { public int Calls, LostFirst, Retries, GaveUp; public long Ms; public int Ok; public long MaxMs; }
@@ -444,6 +475,29 @@ namespace RFIDlibra
         public int BlockWaitMs = 300;
         private const int BlockSameTries = 3, BlockReopenTries = 1;
 
+        /// <summary>
+        /// PR101/MR101 kan i perioder tabe flere kommandoer i træk. En tabt skrivning bliver ikke udført,
+        /// så det er ufarligt at blive ved: hver blok (og hver kontrol-læsning) prøves i op til 5 sekunder.
+        /// </summary>
+        public int BlockPatienceMs = 5000;
+        /// <summary>Samlet loft for én programmering blok for blok, så brugeren ikke venter i det uendelige.</summary>
+        public int WritePatienceMs = 20000;
+        private Stopwatch writeClock;
+        private bool WriteTimeUp { get { return writeClock != null && writeClock.ElapsedMilliseconds >= WritePatienceMs; } }
+
+        private byte[] PatientRead(byte[] uid)
+        {
+            string m;
+            Stopwatch clock = Stopwatch.StartNew();
+            while (IsOpen)
+            {
+                byte[] d = ReadDanish(uid, out m);
+                if (d != null || clock.ElapsedMilliseconds >= BlockPatienceMs || WriteTimeUp) return d;
+                log.Write("  Læsningen er ikke nået frem endnu - bliver ved (" + (clock.ElapsedMilliseconds / 1000.0).ToString("0.0") + " s).");
+            }
+            return null;
+        }
+
         /// <summary>Hovedversion af firmwaren (1 på PR101/MR101, 2 på MR102). 0 = ukendt.</summary>
         public int FirmwareMajor { get; private set; }
         /// <summary>Læsere, hvor skrivning af alle 8 blokke på én gang har slået fejl i denne kørsel.</summary>
@@ -505,23 +559,31 @@ namespace RFIDlibra
 
             // Blok for blok, kontrolsummen (blok 4 og 5) sidst. Blokke, der allerede er rigtige, springes over.
             int[] order = { 0, 1, 2, 3, 6, 7, 4, 5 };
-            for (int round = 1; round <= 2 && IsOpen; round++)
+            writeClock = Stopwatch.StartNew();
+            for (int round = 1; round <= 2 && IsOpen && !WriteTimeUp; round++)
             {
-                byte[] now = ReadDanish(uid, out m);
+                byte[] now = PatientRead(uid);
                 int written = 0;
                 foreach (int blk in order)
                 {
-                    if (!IsOpen) break;
+                    if (!IsOpen || WriteTimeUp) break;
                     bool same = now != null;
                     for (int k = 0; k < 4 && same; k++) same = now[blk * 4 + k] == data32[blk * 4 + k];
                     if (same) continue;
-                    Protocol.Response r = Send(Protocol.CMD_ISO, Addressed(Protocol.ISO_WRITE_BLOCKS, uid, BlockData(data32, blk, 1)), "skriv blok " + blk,
-                        BlockWaitMs, BlockSameTries, BlockReopenTries);
+                    Protocol.Response r = null;
+                    Stopwatch blockClock = Stopwatch.StartNew();
+                    while (IsOpen)
+                    {
+                        r = Send(Protocol.CMD_ISO, Addressed(Protocol.ISO_WRITE_BLOCKS, uid, BlockData(data32, blk, 1)), "skriv blok " + blk,
+                            BlockWaitMs, BlockSameTries, BlockReopenTries);
+                        if (r != null || blockClock.ElapsedMilliseconds >= BlockPatienceMs || WriteTimeUp) break;
+                        log.Write("  Blok " + blk + " er ikke nået frem endnu - bliver ved (" + (blockClock.ElapsedMilliseconds / 1000.0).ToString("0.0") + " s).");
+                    }
                     if (r == null) { error = "blok " + blk + " blev ikke skrevet"; break; }
                     if (r.Status != 0x00) { error = "blok " + blk + ": læseren svarede " + Protocol.StatusText(r.Status); log.Write("  " + error); break; }
                     written++;
                 }
-                byte[] check = ReadDanish(uid, out m);
+                byte[] check = PatientRead(uid);
                 if (check != null && BytesEqual(check, data32))
                 {
                     log.Write("  Skrevet blok for blok (" + written + " blokke) og bekræftet.");
@@ -534,6 +596,7 @@ namespace RFIDlibra
                 else if (error == null) error = "kunne ikke kontrollere det skrevne";
                 log.Write("  Blok for blok blev ikke bekræftet (" + error + ")" + (round < 2 ? " - prøver igen." : "."));
             }
+            if (WriteTimeUp) log.Write("  Opgivet efter " + (WritePatienceMs / 1000) + " sekunder.");
             error = (error ?? "skrivningen mislykkedes") + ". Chippen kan være delvist skrevet - den ses så som ugyldig. Programmér den igen.";
             return false;
         }

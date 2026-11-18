@@ -606,65 +606,78 @@ namespace RFIDlibra
 
         // ---------- Selvtest ----------
 
+        private sealed class TestKind
+        {
+            public string Name;
+            public byte Cmd;
+            public byte[] Data;
+            public int FrameLen, Sent, Lost, Bad;
+            public long Ms;
+        }
+
         /// <summary>
-        /// Afprøver, om PR101 taber færre svar, når der holdes pause mellem kommandoerne.
-        /// For hver pause køres 15 "bøger" som ved skranken: alarmstatus + læsning af blok 0-7.
+        /// Måler, om læseren taber lange kommandoer oftere end korte. Fire slags læsninger sendes på skift,
+        /// hver kun én gang (ingen nye forsøg), og tabene tælles. Der læses kun - intet skrives.
+        ///  A: læs konfiguration (kort, ingen kontakt med chippen)
+        ///  B: læs 8 blokke uden chippens ID (kort, samme arbejde for chippen som D)
+        ///  C: læs 1 blok med chippens ID (lang, mindre arbejde for chippen)
+        ///  D: læs 8 blokke med chippens ID (lang - sådan læser programmet normalt)
+        /// Taber B tydeligt mindre end D, og C omtrent som D, er det kommandoens længde, der betyder noget.
         /// </summary>
         private void SelfTest(List<TagState> seen)
         {
-            log.Write("===== SELVTEST =====");
-            log.Write("Læser: " + reader.DeviceName + ", familie " + reader.Family + ", ID " + reader.DeviceId
-                + ", firmware " + reader.Firmware + ", " + (reader.Advanced ? "Advanced" : "Standard") + "-rammer, adresse 0x" + reader.Address.ToString("X2"));
-            log.Write("feusb.dll: " + usb.Path + " (version " + usb.DllVersion() + "), ventetid " + reader.TimeoutMs + " ms (inventory " + reader.InventoryTimeoutMs + " ms), pause " + reader.GapMs + " ms");
-            if (seen.Count == 0)
+            log.Write("===== SELVTEST: korte og lange kommandoer =====");
+            log.Write("Læser: " + reader.DeviceName + ", ID " + reader.DeviceId + ", firmware " + reader.Firmware
+                + ", feusb.dll " + usb.DllVersion() + ", pause " + reader.GapMs + " ms");
+            if (seen.Count != 1)
             {
-                log.Write("Ingen tags på læseren - læg en bog på og tryk igen.");
+                log.Write(seen.Count == 0 ? "Ingen bog på læseren - læg præcis én bog på og tryk igen."
+                    : "Der ligger " + seen.Count + " chips på læseren - læg præcis én bog (én chip) på og tryk igen.");
                 log.Write("===== SELVTEST SLUT =====");
                 return;
             }
-            TagState s = seen[0];
-            log.Write("Tester på tag " + s.Mac + (seen.Count > 1 ? " (der ligger " + seen.Count + " tags - kun det første testes)" : ""));
+            byte[] uid = seen[0].Uid;
+            log.Write("Tester på chip " + seen[0].Mac + ". Der læses kun - intet skrives. Tager typisk under et halvt minut.");
 
-            int keepGap = reader.GapMs;
-            bool keepRaw = reader.LogRaw;
-            reader.LogRaw = false;
-            List<string> summary = new List<string>();
-            const int books = 15;
-            try
+            byte[] withId8 = { Protocol.ISO_READ_BLOCKS, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8 };
+            byte[] withId1 = { Protocol.ISO_READ_BLOCKS, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+            Array.Copy(uid, 0, withId8, 2, 8);
+            Array.Copy(uid, 0, withId1, 2, 8);
+            TestKind[] kinds =
             {
-                foreach (int gap in new[] { 0, 5, 20, 50 })
+                new TestKind { Name = "A læs konfiguration", Cmd = Protocol.CMD_READ_CFG, Data = new byte[] { 1 } },
+                new TestKind { Name = "B 8 blokke uden ID ", Cmd = Protocol.CMD_ISO, Data = new byte[] { Protocol.ISO_READ_BLOCKS, 0x00, 0, 8 } },
+                new TestKind { Name = "C 1 blok med ID    ", Cmd = Protocol.CMD_ISO, Data = withId1 },
+                new TestKind { Name = "D 8 blokke med ID  ", Cmd = Protocol.CMD_ISO, Data = withId8 },
+            };
+            const int rounds = 25;
+            Stopwatch total = Stopwatch.StartNew();
+            for (int i = 0; i < rounds && reader.IsOpen; i++)
+            {
+                foreach (TestKind k in kinds)
                 {
-                    if (!reader.IsOpen) { summary.Add("Forbindelsen er tabt - testen stoppede her."); break; }
-                    reader.GapMs = gap;
-                    log.Write("--- pause " + gap + " ms ---");
-                    int t0 = reader.Transfers, to0 = reader.Timeouts, g0 = reader.GaveUp;
-                    int ok = 0;
-                    long sum = 0, max = 0;
-                    for (int i = 0; i < books && reader.IsOpen; i++)
-                    {
-                        Stopwatch sw = Stopwatch.StartNew();
-                        string m;
-                        bool good = reader.ReadAfi(s.Uid) != null && reader.ReadDanish(s.Uid, out m) != null;
-                        long ms = sw.ElapsedMilliseconds;
-                        if (good) ok++;
-                        sum += ms;
-                        if (ms > max) max = ms;
-                    }
-                    int calls = reader.Transfers - t0, lost = reader.Timeouts - to0;
-                    summary.Add("pause " + gap.ToString().PadLeft(2) + " ms: " + ok + " af " + books + " bøger OK, tabte svar " + lost + " af " + calls
-                        + " (" + (calls > 0 ? (100.0 * lost / calls).ToString("0") : "0") + " %), opgivet " + (reader.GaveUp - g0)
-                        + ", pr. bog i snit " + (sum / books) + " ms, længst " + max + " ms");
+                    if (!reader.IsOpen) break;
+                    byte[] frame;
+                    Stopwatch sw = Stopwatch.StartNew();
+                    Protocol.Response r = reader.SendOnce(k.Cmd, k.Data, reader.TimeoutMs, out frame);
+                    k.FrameLen = frame != null ? frame.Length : 0;
+                    k.Sent++;
+                    if (r == null) { k.Lost++; continue; }
+                    k.Ms += sw.ElapsedMilliseconds;
+                    if (r.Status != 0x00) k.Bad++;
                 }
             }
-            finally
+            log.Write("----- RESULTAT (" + rounds + " runder, " + (total.ElapsedMilliseconds / 1000.0).ToString("0.0") + " s) -----");
+            foreach (TestKind k in kinds)
             {
-                reader.GapMs = keepGap;
-                reader.LogRaw = keepRaw;
+                int answered = k.Sent - k.Lost;
+                log.Write(k.Name + " (" + k.FrameLen.ToString().PadLeft(2) + " bytes): tabt " + k.Lost + " af " + k.Sent
+                    + " (" + (k.Sent > 0 ? (100.0 * k.Lost / k.Sent).ToString("0") : "0") + " %)"
+                    + (answered > 0 ? ", svar " + (k.Ms / answered) + " ms i snit" : "")
+                    + (k.Bad > 0 ? ", " + k.Bad + " svar med fejlstatus" : ""));
             }
-            log.Write("----- RESULTAT -----");
-            foreach (string line in summary) log.Write(line);
-            log.Write("Siden start: " + reader.Stats);
-            log.Write("===== SELVTEST SLUT =====");
+            if (!reader.IsOpen) log.Write("Forbindelsen blev tabt undervejs - resultatet er ufuldstændigt.");
+            log.Write("===== SELVTEST SLUT - send loggen til Claude =====");
         }
     }
 }
