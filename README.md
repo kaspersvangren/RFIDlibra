@@ -10,6 +10,7 @@ Pc'en skal have FEIG's USB-driver ("FEIG ID USB Driver" til Windows 10/11, hos o
 
 1. Hent `RFIDlibra.exe` og start den. Siger Windows "Windows beskyttede din pc", så vælg *Flere oplysninger* → *Kør alligevel* (kun første gang).
 2. Under **Indstillinger** slås *Start RFIDlibra, når jeg logger på Windows* til. Programmet lægger sig så i `%LOCALAPPDATA%\Programs\RFIDlibra` og starter derfra med skrankevinduet og et ikon ved uret.
+   **For alle brugere på en pc:** under Indstillinger → *Installer for alle brugere*. Windows beder om administrator (fx via LAPS). Programmet og FEIG's `feusb.dll` lægges i `C:\Program Files\RFIDlibra`, en genvej i den fælles Start-mappe starter det for alle, der logger på, og biblioteksnummeret gemmes til hele pc'en i `C:\ProgramData\RFIDlibra`. En ny version installeres på samme måde (kræver igen administrator). *Fjern for alle brugere* gør det modsatte.
 3. I Cicero Mobile → Enhedsindstillinger → RFID: vælg leverandøren **Deichman**, adresse **localhost**, port **1667** (tag-dataformat "Danish Item"). Den gamle Cicero og sandkassen kan sættes op på samme måde.
 
 Ikonet ved uret er **grønt**, når læseren er klar og Cicero lytter, **gult**, når læseren er klar men Cicero ikke lytter, og **rødt**, når der ikke er nogen læser. Klik på ikonet for at vise skrankevinduet, hvis det er skjult.
@@ -36,7 +37,7 @@ Indstillinger og Fejlfinding er sider, som programmet selv viser i rene Edge-vin
 
 ## Hvordan det virker
 
-- USB-forbindelsen går gennem FEIG's `feusb.dll`. RFIDlibra har FEIG's egen udgave med indbygget (64-bit, version 6.0.0.0, fra FEIG's ID USB-driverpakke v3.26) og lægger den ved siden af programmet første gang - eller i `%LOCALAPPDATA%\RFIDlibra\feig`, hvis programmets mappe ikke må skrives i. En `feusb.dll`, der allerede ligger der, røres ikke. Se [feig/LÆSMIG.md](feig/LÆSMIG.md) om FEIG's licens. Kommandoerne (FEIG's "ISO Host"-protokol med CRC) bygges af programmet selv.
+- USB-forbindelsen går gennem FEIG's `feusb.dll`. RFIDlibra har FEIG's egen udgave med indbygget (64-bit, version 6.0.0.0, fra FEIG's ID USB-driverpakke v3.26) og lægger den i `%LOCALAPPDATA%\RFIDlibra\feig` første gang. Ligger der en `feusb.dll` ved siden af programmet (fx i Program Files), bruges den i stedet. En `feusb.dll`, der allerede ligger, røres ikke. Se [feig/LÆSMIG.md](feig/LÆSMIG.md) om FEIG's licens. Kommandoerne (FEIG's "ISO Host"-protokol med CRC) bygges af programmet selv.
 - Mod Cicero svarer programmet som Deichmans [go-feig](https://github.com/digibib/go-feig) på localhost:1667 (HTTP + server-sent events).
 - Tagindholdet læses og skrives efter den danske datamodel, som i NFClibra og go-feig. Alt, der skrives, kontrolleres ved at læse tagget igen. Lås-kommandoer kan ikke sendes.
 - PR101 med firmware 1.7 taber af og til et svar på USB (det gør den også med Bibliothecas software). RFIDlibra venter kort på svar og prøver straks igen - op til 3 gange på samme forbindelse, derefter efter en genåbning.

@@ -462,8 +462,14 @@
       </div>
       <div class="panel">
         <h3>Start</h3>
-        <label class="switch"><input type="checkbox" id="swAuto"> Start RFIDlibra, når jeg logger på Windows</label>
-        <p class="hint">Skrankevinduet vises, og der er et ikon ved uret. Klik på ikonet, hvis skrankevinduet er skjult.</p>
+        <label class="switch" id="lblAuto"><input type="checkbox" id="swAuto"> Start RFIDlibra, når jeg logger på Windows</label>
+        <p class="hint" id="hintAuto">Skrankevinduet vises, og der er et ikon ved uret. Klik på ikonet, hvis skrankevinduet er skjult.</p>
+      </div>
+      <div class="panel">
+        <h3>Alle brugere på denne pc</h3>
+        <p id="allStatus" style="margin:0 0 12px"></p>
+        <div class="row"><button class="btn primary" id="bAll"></button></div>
+        <p class="hint" id="allHint"></p>
       </div>
       <div class="panel">
         <h3>Om</h3>
@@ -873,6 +879,15 @@ $("swAuto").onchange = async e => {
   toast(r.message, !r.ok || /lykkedes ikke/.test(r.message));
 };
 
+$("bAll").onclick = async () => {
+  const on = !S.settings.allUsers;
+  $("bAll").disabled = true;
+  $("bAll").textContent = "Venter på administrator …";
+  const r = await post("allusers", { on: on ? 1 : 0 }).catch(() => ({ ok: false, message: "RFIDlibra svarede ikke" }));
+  $("bAll").disabled = false;
+  toast(r.message, !r.ok || /lykkedes ikke|Annulleret|svarede ikke/.test(r.message));
+};
+
 // ---------- Fejlfinding ----------
 $("bSelf").onclick = () => post("selftest").then(r => toast(r.message));
 $("bReconnect").onclick = () => post("reconnect").then(r => toast(r.message));
@@ -923,7 +938,17 @@ function renderTop() {
   $("iFeusb").textContent = r.feusb || "ikke fundet";
   $("stats").textContent = r.stats ? "Siden start: " + r.stats : "";
   if (document.activeElement !== $("inLib")) $("inLib").value = S.settings.library;
-  $("swAuto").checked = S.settings.autostart;
+  const all = S.settings.allUsers;
+  $("swAuto").checked = S.settings.autostart || all;
+  $("swAuto").disabled = all;
+  $("lblAuto").style.opacity = all ? .55 : 1;
+  $("hintAuto").textContent = all ? "RFIDlibra er installeret for alle brugere og starter for alle, der logger på." : "Skrankevinduet vises, og der er et ikon ved uret. Klik på ikonet, hvis skrankevinduet er skjult.";
+  $("allStatus").textContent = all ? "Installeret i " + S.settings.allUsersDir + " og starter for alle, der logger på." : "Ikke installeret for alle brugere.";
+  if (!$("bAll").disabled) $("bAll").textContent = all ? "Fjern for alle brugere" : "Installer for alle brugere";
+  $("bAll").className = all ? "btn" : "btn primary";
+  $("allHint").textContent = all
+    ? "Kræver administrator (LAPS). Hver brugers egne indstillinger bliver liggende."
+    : "Kræver administrator (LAPS). Programmet og FEIG's feusb.dll lægges i " + S.settings.allUsersDir + ", og det starter for alle, der logger på. Biblioteksnummeret gemmes til hele pc'en. Vinduets plads og kompakt visning gemmes stadig pr. bruger.";
   $("swRaw").checked = S.settings.logRaw;
   const libs = [...new Set(S.tags.filter(t => t.kind === "danish" && t.library).map(t => t.library))].filter(l => l !== S.settings.library);
   $("libChips").innerHTML = libs.map(l => '<button class="btn small" data-lib="' + esc(l) + '">Brug DK-' + esc(l) + " fra chippen på læseren</button>").join("");

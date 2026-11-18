@@ -14,7 +14,15 @@ namespace RFIDlibra
         [STAThread]
         private static void Main(string[] args)
         {
+            // Administrator-delen af "Installer/fjern for alle brugere" (startet af programmet selv med runas)
+            if (args.Length > 0 && (args[0] == AllUsers.InstallArg || args[0] == AllUsers.RemoveArg))
+            {
+                Environment.Exit(AllUsers.RunAsAdmin(args));
+                return;
+            }
             bool background = args.Any(a => a == "--baggrund");
+            // Ved login: er RFIDlibra installeret for alle brugere, er det den udgave, der skal køre - ikke en gammel personlig kopi
+            if (background && AllUsers.Installed && !AllUsers.RunningFromInstall) return;
             bool created;
             using (Mutex single = new Mutex(true, @"Local\RFIDlibra-en-ad-gangen", out created))
             {

@@ -13,7 +13,7 @@ namespace RFIDlibra
 {
     public static class AppInfo
     {
-        public const string Version = "0.8.4";
+        public const string Version = "0.8.5";
 
         public static string DataDir
         {
@@ -69,6 +69,7 @@ namespace RFIDlibra
             token = BitConverter.ToString(b).Replace("-", "").ToLowerInvariant();
             AppInfo.Save("nøgle.txt", token);
             library = AppInfo.Load("library.txt");
+            if (library.Length == 0) library = AllUsers.MachineLibrary;   // sat til hele pc'en ved "Installer for alle brugere"
             invoker.CreateControl();
 
             Log.Write("RFIDlibra " + AppInfo.Version + " startet" + (background ? " i baggrunden" : "") + ". Windows " + Environment.OSVersion.Version);
@@ -88,6 +89,7 @@ namespace RFIDlibra
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Afslut", null, (s, e) => Quit());
             menu.Items[0].Font = new Font(menu.Items[0].Font, FontStyle.Bold);
+            UpdateAutostartItem();
             tray.ContextMenuStrip = menu;
             tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) ShowWidget(); };
 
@@ -266,6 +268,31 @@ namespace RFIDlibra
             return msg;
         }
 
+        /// <summary>Installer/fjern for alle brugere på pc'en. Beder om administrator (fx LAPS) og venter på svar.</summary>
+        public string SetAllUsers(bool on)
+        {
+            Log.Write(on ? "Installerer for alle brugere - Windows beder om administrator." : "Fjerner for alle brugere - Windows beder om administrator.");
+            bool ok;
+            string msg = AllUsers.RunElevated(on, library, out ok);
+            if (ok && on && Launcher.AutostartEnabled)
+            {
+                SetAutostart(false);   // brugerens egen genvej er overflødig nu
+                msg += " Din egen \"Start med Windows\" er slået fra, da den ikke længere er nødvendig.";
+            }
+            Log.Write(msg);
+            UpdateAutostartItem();
+            return msg;
+        }
+
+        private void UpdateAutostartItem()
+        {
+            if (invoker.InvokeRequired) { invoker.BeginInvoke((Action)UpdateAutostartItem); return; }
+            bool all = AllUsers.Installed;
+            autostartItem.Enabled = !all;
+            autostartItem.Text = all ? "Start med Windows (installeret for alle brugere)" : "Start med Windows";
+            autostartItem.Checked = all || Launcher.AutostartEnabled;
+        }
+
         private void CheckServices()
         {
             lastServiceCheck = DateTime.Now;
@@ -303,6 +330,8 @@ namespace RFIDlibra
             sb.Append(",\"tags\":").Append(w != null && readerOk ? w.TagsJson : "[]");
             sb.Append(",\"settings\":{\"library\":").Append(Json.Str(library));
             sb.Append(",\"autostart\":").Append(Launcher.AutostartEnabled ? "true" : "false");
+            sb.Append(",\"allUsers\":").Append(AllUsers.Installed ? "true" : "false");
+            sb.Append(",\"allUsersDir\":").Append(Json.Str(AllUsers.Dir));
             sb.Append(",\"logRaw\":").Append(w != null && w.LogRaw ? "true" : "false");
             sb.Append("}}");
             return sb.ToString();
