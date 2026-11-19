@@ -32,14 +32,36 @@ jobs:
           # Versionen står i RFIDlibra.csproj (<Version>). Samme version bygget igen erstatter filen i udgivelsen.
           $version = ([xml](Get-Content RFIDlibra.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
           $tag = "v$version"
+          $repo = "${{ github.repository }}"
           Write-Host "Version $version"
-          gh release view $tag --repo "${{ github.repository }}" *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag out/RFIDlibra.exe --clobber --repo "${{ github.repository }}"
-          } else {
-            gh release create $tag out/RFIDlibra.exe --title "RFIDlibra $version" --notes "Se CHANGELOG.md" --latest --repo "${{ github.repository }}"
+
+          # Teksten til hver udgivelse er versionens egen linje i CHANGELOG.md
+          $notes = @{}
+          foreach ($line in Get-Content CHANGELOG.md -Encoding UTF8) {
+            if ($line -match '^- \*\*([0-9]+\.[0-9]+\.[0-9]+)\*\*\s*\S\s*(.+)$') { $notes[$Matches[1]] = $Matches[2] }
           }
-          exit $LASTEXITCODE
+          function NotesFile($v) {
+            $text = if ($notes.ContainsKey($v)) { $notes[$v] } else { "Se CHANGELOG.md." }
+            $text += "`n`nHele ændringslisten: https://github.com/$repo/blob/main/CHANGELOG.md"
+            $f = Join-Path $env:RUNNER_TEMP "notes-$v.md"
+            [IO.File]::WriteAllText($f, $text, (New-Object Text.UTF8Encoding $false))
+            return $f
+          }
+
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag out/RFIDlibra.exe --clobber --repo $repo
+          } else {
+            gh release create $tag out/RFIDlibra.exe --title "RFIDlibra $version" --notes-file (NotesFile $version) --latest --repo $repo
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Hold teksten på alle udgivelser i takt med CHANGELOG.md (også de gamle)
+          foreach ($v in $notes.Keys) {
+            gh release view "v$v" --repo $repo *> $null
+            if ($LASTEXITCODE -eq 0) { gh release edit "v$v" --notes-file (NotesFile $v) --repo $repo | Out-Null; Write-Host "Tekst opdateret: v$v" }
+          }
+          exit 0
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
