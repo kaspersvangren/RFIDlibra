@@ -677,7 +677,7 @@ namespace RFIDlibra
                     + (k.Bad > 0 ? ", " + k.Bad + " svar med fejlstatus" : ""));
             }
             if (!reader.IsOpen) log.Write("Forbindelsen blev tabt undervejs - resultatet er ufuldstændigt.");
-            log.Write("===== SELVTEST SLUT - send loggen til Claude =====");
+            log.Write("===== SELVTEST SLUT =====");
         }
     }
 }

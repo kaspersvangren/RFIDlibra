@@ -1,6 +1,6 @@
 # RFIDlibra
 
-Eget Windows-program, der får bibliotekets FEIG RFID-læsere (fx den lille **ID ISC.PR101** og MR101/MR102) til at virke med Cicero Mobile - ligesom [NFClibra](https://github.com/kaspersvangren/NFClibra) gør det på telefonen.
+Eget Windows-program, der får bibliotekets FEIG RFID-læsere (fx den lille **ID ISC.PR101** og MR101/MR102) til at virke med Cicero Mobile og Cicero LMS - ligesom [NFClibra](https://github.com/kaspersvangren/NFClibra) gør det på telefonen.
 
 Seneste version: [RFIDlibra.exe](https://github.com/kaspersvangren/rfidlibra/releases/latest/download/RFIDlibra.exe)
 
@@ -10,7 +10,7 @@ Pc'en skal have FEIG's USB-driver ("FEIG ID USB Driver" til Windows 10/11, hos o
 
 1. Hent `RFIDlibra.exe` og start den. Siger Windows "Windows beskyttede din pc", så vælg *Flere oplysninger* → *Kør alligevel* (kun første gang).
 2. Under **Indstillinger** slås *Start RFIDlibra, når jeg logger på Windows* til. Programmet lægger sig så i `%LOCALAPPDATA%\Programs\RFIDlibra` og starter derfra med skrankevinduet og et ikon ved uret.
-   **For alle brugere på en pc:** under Indstillinger → *Installer for alle brugere*. Windows beder om administrator (fx via LAPS). Programmet og FEIG's `feusb.dll` lægges i `C:\Program Files\RFIDlibra`, en genvej i den fælles Start-mappe starter det for alle, der logger på, og biblioteksnummeret gemmes til hele pc'en i `C:\ProgramData\RFIDlibra`. En ny version installeres på samme måde (kræver igen administrator). *Fjern for alle brugere* gør det modsatte.
+   **For alle brugere på en pc:** under Indstillinger → *Installer for alle brugere*. Kræver administrative rettigheder – Windows beder om dem, når du trykker. Programmet og FEIG's `feusb.dll` lægges i `C:\Program Files\RFIDlibra`, en genvej i den fælles Start-mappe starter det for alle, der logger på, og biblioteksnummeret gemmes til hele pc'en i `C:\ProgramData\RFIDlibra`. En ny version installeres på samme måde (kræver igen administrator). *Fjern for alle brugere* gør det modsatte.
 3. I Cicero Mobile → Enhedsindstillinger → RFID: vælg leverandøren **Deichman**, adresse **localhost**, port **1667** (tag-dataformat "Danish Item"). Den gamle Cicero og sandkassen kan sættes op på samme måde.
 
 Ikonet ved uret er **grønt**, når læseren er klar og Cicero lytter, **gult**, når læseren er klar men Cicero ikke lytter, og **rødt**, når der ikke er nogen læser. Klik på ikonet for at vise skrankevinduet, hvis det er skjult.
@@ -30,7 +30,7 @@ Et lille vindue uden kanter, der altid ligger øverst. Det kan trækkes rundt og
 ## De andre vinduer
 
 - **Værktøj til tags** - et fast vindue (ca. 700 × 440, kan ikke ændre størrelse, ingen rullebjælke). Til venstre chippene på læseren: klik på en for at se den, slå alarmen til/fra eller nulstille den. Til højre programmering med materialenummer. Antal dele foreslås ud fra, hvor mange chips der ligger på læseren; det kan sættes op, men ikke under det antal. Alle chips på læseren programmeres på én gang, og mangler der dele, bliver man bedt om resten undervejs. Rækkefølgen er tilfældig, når flere skrives på én gang - skal cd 1 være del 1, lægges chippene på én ad gangen. Alarmen slås til efter programmering, og chips med indhold overskrives kun efter én bekræftelse for hele sættet.
-- **Indstillinger** - biblioteksnummer til nye chips og start med Windows.
+- **Indstillinger** - biblioteksnummer til nye chips, start med Windows, installation for alle brugere, tjek efter nye versioner og "Om".
 - **Fejlfinding** - log, selvtest og "forbind igen".
 
 Indstillinger og Fejlfinding er sider, som programmet selv viser i rene Edge-vinduer (`http://localhost:1667/app`). Kun programmet kender nøglen til sidernes funktioner.
@@ -44,3 +44,18 @@ Indstillinger og Fejlfinding er sider, som programmet selv viser i rene Edge-vin
 - PR101/MR101 (firmware 1.x) når ikke at skrive alle 8 blokke på en chip i ét hug - de stopper efter blok 4. Derfor skriver RFIDlibra blok for blok på dem, med kontrolsummen (blok 4 og 5) sidst, så en halvt skrevet chip altid ses som ugyldig. Alt skrevet kontrolleres ved at læse chippen igen.
 
 Logfiler: `%LOCALAPPDATA%\RFIDlibra\log` (gemmes i 14 dage).
+
+## Nye versioner
+
+Under Indstillinger kan *Tjek efter nye versioner* slås til (det er slået fra fra start). RFIDlibra spørger så GitHub ved start og én gang i døgnet og viser en lille besked ved uret, når der er en ny version, med knapperne *Se hvad der er nyt*, *Senere* og *Vis ikke igen* (gælder kun den version). Programmet henter eller installerer aldrig noget selv.
+
+## Hvem har lavet den
+
+- Idé, design og test: Kasper Svangren, Gladsaxe Bibliotekerne
+- Kode: Claude (AI fra Anthropic)
+
+## Licens
+
+RFIDlibra: MIT - se [LICENSE](LICENSE). Testet med FEIG ID ISC.PR101, MR101 og MR102.
+
+`feig/feusb.dll` er FEIG ELECTRONIC GmbH's og følger med uændret under FEIG's egen licens - se [feig/LÆSMIG.md](feig/LÆSMIG.md). FEIG's USB-driver følger ikke med og installeres separat.

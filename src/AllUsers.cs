@@ -12,7 +12,7 @@ namespace RFIDlibra
     /// <summary>
     /// "Installer for alle brugere på denne pc": programmet og FEIG's feusb.dll lægges i C:\Program Files\RFIDlibra,
     /// en genvej i den fælles Start-mappe starter det for alle, der logger på, og biblioteksnummeret gemmes til hele pc'en
-    /// i C:\ProgramData\RFIDlibra. Kræver administrator (fx via LAPS): programmet starter en kopi af sig selv med "runas".
+    /// i C:\ProgramData\RFIDlibra. Kræver administrative rettigheder: programmet starter en kopi af sig selv med "runas".
     /// </summary>
     public static class AllUsers
     {

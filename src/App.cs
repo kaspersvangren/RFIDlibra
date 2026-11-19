@@ -13,7 +13,7 @@ namespace RFIDlibra
 {
     public static class AppInfo
     {
-        public const string Version = "0.8.8";
+        public const string Version = "1.0.0";
 
         public static string DataDir
         {
@@ -61,6 +61,7 @@ namespace RFIDlibra
         private volatile string library;
         private readonly Control invoker = new Control();   // til at køre ting på brugerfladens tråd (COM, menuer)
         private readonly Widget widget;
+        public UpdateCheck Updates { get; private set; }
 
         public App(bool background)
         {
@@ -71,6 +72,7 @@ namespace RFIDlibra
             library = AppInfo.Load("library.txt");
             if (library.Length == 0) library = AllUsers.MachineLibrary;   // sat til hele pc'en ved "Installer for alle brugere"
             invoker.CreateControl();
+            Updates = new UpdateCheck(Log, invoker);
 
             Log.Write("RFIDlibra " + AppInfo.Version + " startet" + (background ? " i baggrunden" : "") + ". Windows " + Environment.OSVersion.Version);
             if (Log.FilePath != null) Log.Write("Loggen gemmes også her: " + Log.FilePath);
@@ -106,7 +108,7 @@ namespace RFIDlibra
             CheckServices();
             StartReader();
 
-            timer.Tick += (s, e) => { UpdateTray(); if ((DateTime.Now - lastServiceCheck).TotalSeconds > 10) CheckServices(); };
+            timer.Tick += (s, e) => { UpdateTray(); Updates.Tick(); if ((DateTime.Now - lastServiceCheck).TotalSeconds > 10) CheckServices(); };
             timer.Start();
 
             if (!Widget.StartHidden) widget.ShowWidget();
@@ -268,7 +270,7 @@ namespace RFIDlibra
             return msg;
         }
 
-        /// <summary>Installer/fjern for alle brugere på pc'en. Beder om administrator (fx LAPS) og venter på svar.</summary>
+        /// <summary>Installer/fjern for alle brugere på pc'en. Beder om administrative rettigheder og venter på svar.</summary>
         public string SetAllUsers(bool on)
         {
             Log.Write(on ? "Installerer for alle brugere - Windows beder om administrator." : "Fjerner for alle brugere - Windows beder om administrator.");
@@ -332,6 +334,9 @@ namespace RFIDlibra
             sb.Append(",\"autostart\":").Append(Launcher.AutostartEnabled ? "true" : "false");
             sb.Append(",\"allUsers\":").Append(AllUsers.Installed ? "true" : "false");
             sb.Append(",\"allUsersDir\":").Append(Json.Str(AllUsers.Dir));
+            sb.Append(",\"updateCheck\":").Append(Updates.Enabled ? "true" : "false");
+            sb.Append(",\"updateStatus\":").Append(Json.Str(Updates.Status));
+            sb.Append(",\"repo\":").Append(Json.Str(UpdateCheck.RepoUrl));
             sb.Append(",\"logRaw\":").Append(w != null && w.LogRaw ? "true" : "false");
             sb.Append("}}");
             return sb.ToString();

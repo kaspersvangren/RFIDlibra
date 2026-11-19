@@ -320,6 +320,8 @@
   dl.info { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 0; font-size: 14px; }
   dl.info dt { color: #5b6b70; }
   dl.info dd { margin: 0; word-break: break-all; }
+  dl.info dd.txt { word-break: normal; }
+  dl.info a { color: #1d4a57; }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
   .hint { color: #5b6b70; font-size: 13.5px; margin-top: 8px; }
 
@@ -466,6 +468,12 @@
         <p class="hint" id="hintAuto">Skrankevinduet vises, og der er et ikon ved uret. Klik på ikonet, hvis skrankevinduet er skjult.</p>
       </div>
       <div class="panel">
+        <h3>Nye versioner</h3>
+        <label class="switch"><input type="checkbox" id="swUpdate"> Tjek efter nye versioner</label>
+        <p class="hint">Spørger GitHub ved start og derefter én gang i døgnet. Er der en ny version, vises en besked ved uret. RFIDlibra opdaterer aldrig sig selv.</p>
+        <p class="hint" id="updStatus"></p>
+      </div>
+      <div class="panel">
         <h3>Alle brugere på denne pc</h3>
         <p id="allStatus" style="margin:0 0 12px"></p>
         <div class="row"><button class="btn primary" id="bAll"></button></div>
@@ -475,9 +483,16 @@
         <h3>Om</h3>
         <dl class="info">
           <dt>Version</dt><dd id="iVersion"></dd>
+          <dt>Hvad</dt><dd class="txt">Forbinder FEIG RFID-læsere med Cicero Mobile og Cicero LMS via Deichman-protokollen.</dd>
+          <dt>Testet med</dt><dd class="txt">FEIG PR101, MR101 og MR102</dd>
+          <dt>Idé, design og test</dt><dd class="txt">Kasper Svangren, Gladsaxe Bibliotekerne</dd>
+          <dt>Kode</dt><dd class="txt">Claude (AI fra Anthropic)</dd>
+          <dt>Kildekode</dt><dd><a id="iRepo" href="https://github.com/kaspersvangren/RFIDlibra" target="_blank" rel="noopener">github.com/kaspersvangren/RFIDlibra</a></dd>
+          <dt>Licens</dt><dd class="txt">MIT – må frit bruges, rettes og deles.</dd>
           <dt>Læser</dt><dd id="iReader"></dd>
           <dt>FEIG-fil</dt><dd id="iFeusb"></dd>
-          <dt>Cicero</dt><dd>Vælg leverandøren Deichman, adresse localhost og port 1667 i Ciceros enhedsindstillinger.</dd>
+          <dt>FEIG</dt><dd class="txt">feusb.dll © FEIG ELECTRONIC GmbH følger med uændret under FEIG's licens og må kun bruges med FEIG's læsere. FEIG's USB-driver installeres separat.</dd>
+          <dt>Cicero</dt><dd class="txt">Vælg leverandøren Deichman, adresse localhost og port 1667 i Ciceros enhedsindstillinger.</dd>
         </dl>
       </div>
     </div>
@@ -879,6 +894,11 @@ $("swAuto").onchange = async e => {
   toast(r.message, !r.ok || /lykkedes ikke/.test(r.message));
 };
 
+$("swUpdate").onchange = async e => {
+  const r = await post("settings", { update: e.target.checked ? 1 : 0 });
+  toast(r.message, !r.ok);
+};
+
 $("bAll").onclick = async () => {
   const on = !S.settings.allUsers;
   $("bAll").disabled = true;
@@ -939,6 +959,8 @@ function renderTop() {
   $("stats").textContent = r.stats ? "Siden start: " + r.stats : "";
   if (document.activeElement !== $("inLib")) $("inLib").value = S.settings.library;
   const all = S.settings.allUsers;
+  $("swUpdate").checked = S.settings.updateCheck;
+  $("updStatus").textContent = S.settings.updateCheck ? S.settings.updateStatus : "";
   $("swAuto").checked = S.settings.autostart || all;
   $("swAuto").disabled = all;
   $("lblAuto").style.opacity = all ? .55 : 1;
@@ -947,8 +969,8 @@ function renderTop() {
   if (!$("bAll").disabled) $("bAll").textContent = all ? "Fjern for alle brugere" : "Installer for alle brugere";
   $("bAll").className = all ? "btn" : "btn primary";
   $("allHint").textContent = all
-    ? "Kræver administrator (LAPS). Hver brugers egne indstillinger bliver liggende."
-    : "Kræver administrator (LAPS). Programmet og FEIG's feusb.dll lægges i " + S.settings.allUsersDir + ", og det starter for alle, der logger på. Biblioteksnummeret gemmes til hele pc'en. Vinduets plads og kompakt visning gemmes stadig pr. bruger.";
+    ? "Kræver administrative rettigheder på pc'en. Hver brugers egne indstillinger bliver liggende."
+    : "Kræver administrative rettigheder på pc'en. Programmet og FEIG's feusb.dll lægges i " + S.settings.allUsersDir + ", og det starter for alle, der logger på. Biblioteksnummeret gemmes til hele pc'en. Vinduets plads og kompakt visning gemmes stadig pr. bruger.";
   $("swRaw").checked = S.settings.logRaw;
   const libs = [...new Set(S.tags.filter(t => t.kind === "danish" && t.library).map(t => t.library))].filter(l => l !== S.settings.library);
   $("libChips").innerHTML = libs.map(l => '<button class="btn small" data-lib="' + esc(l) + '">Brug DK-' + esc(l) + " fra chippen på læseren</button>").join("");

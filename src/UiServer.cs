@@ -83,6 +83,8 @@ namespace RFIDlibra
                         {
                             string lib = Q(req, "library");
                             if (lib != null) app.SetLibrary(lib);
+                            string upd = Q(req, "update");
+                            if (upd != null) { app.Updates.Enabled = upd == "1"; Ok(outp, upd == "1" ? "RFIDlibra tjekker nu efter nye versioner" : "Tjekker ikke efter nye versioner"); return; }
                             string auto = Q(req, "autostart");
                             string msg = auto != null ? app.SetAutostart(auto == "1") : "Gemt";
                             Ok(outp, msg);

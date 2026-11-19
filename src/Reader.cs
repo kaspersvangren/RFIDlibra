@@ -97,7 +97,7 @@ namespace RFIDlibra
                     if (!IsOpen) return false;
                 }
             }
-            log.Write("Læseren svarede ikke på nogen af forsøgene. Send loggen til Claude.");
+            log.Write("Læseren svarede ikke på nogen af forsøgene. Tag læserens USB-stik ud og sæt det i igen. Hjælper det ikke, så gem loggen under Fejlfinding.");
             Close();
             return false;
         }
