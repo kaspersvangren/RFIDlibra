@@ -160,6 +160,10 @@ namespace RFIDlibra
         private readonly FlatBtn bOn = new FlatBtn(), bOff = new FlatBtn(), bReset = new FlatBtn(), bCopy = new FlatBtn();
         private readonly TextBox cardNum = new TextBox();   // materialenummeret i kortet - kan markeres og kopieres
         private string lastAutoBc;                           // nummer, der sidst blev hentet fra en chip ind i skrivefeltet
+        private string autoKey;                              // chippene (uid, indhold), som skrivefeltet sidst blev udfyldt efter
+        private bool numAuto;                                // antal dele kom fra chippene, ikke fra brugeren
+        private HashSet<string> noteUids;                    // chippene, der lå der, da "programmeret"-beskeden kom
+        private string busyText;                             // fx "Nulstiller 3 af 7 …"
 
         private int? numUser;
         private Armed armed;
@@ -327,6 +331,16 @@ namespace RFIDlibra
             return t;
         }
 
+        /// <summary>Flere chips på læseren, og ingen er valgt alene: kortet og knapperne gælder dem alle.</summary>
+        private bool AllMode() { return selected == null && Tags().Count > 1; }
+
+        /// <summary>Materialenummeret, hvis alle chippene er dele af samme sæt - ellers null.</summary>
+        private static string SetBarcode(List<TagView> rd)
+        {
+            if (rd.Count < 2 || rd.Any(t => t.Kind != "danish" || t.Barcode.Length == 0 || t.Num < 2)) return null;
+            return rd.Select(t => t.Barcode).Distinct().Count() == 1 && rd.Select(t => t.Num).Distinct().Count() == 1 ? rd[0].Barcode : null;
+        }
+
         private void Tick()
         {
             if (cardMsg != null && DateTime.Now > cardMsgUntil) { cardMsg = null; key = ""; }
@@ -335,6 +349,10 @@ namespace RFIDlibra
             string k = n.ReaderOk + "|" + n.ReaderText + "|" + n.Listening + "|" + app.Library + "|"
                 + string.Join(",", n.Tags.Select(t => t.Uid + t.Kind + t.Barcode + t.Seq + "/" + t.Num + t.Afi + t.RawLibrary));
             st = n;
+            if (doneMsg != null && noteUids != null && !noteUids.SetEquals(n.ReaderOk ? n.Tags.Select(t => t.Uid) : Enumerable.Empty<string>()))
+            {
+                doneMsg = null; noteUids = null; key = "";
+            }
             if (k != key) { key = k; Render(); }
             else Step();
         }
@@ -347,6 +365,7 @@ namespace RFIDlibra
         private void ChangeNum(int d)
         {
             int v = PartsValue() + d;
+            numAuto = false;
             if (d < 0) numUser = v <= MinParts() ? (int?)null : v;
             else numUser = Math.Min(99, v);
             Render();
@@ -367,15 +386,29 @@ namespace RFIDlibra
         {
             TagView sel = Selected();
             if (sel == null) selected = null;
-            bool chipOk = sel != null && sel.Kind != "unread" && !chipBusy && (armed == null || !armed.Busy);
-            bOn.Enabled = chipOk && sel.Afi != TagState.AFI_ON;
-            bOff.Enabled = chipOk && sel.Afi != TagState.AFI_OFF;
-            bReset.Enabled = chipOk && sel.Kind != "blank";
-            bool show = sel != null;
-            bOn.Visible = bOff.Visible = bReset.Visible = show;
-            bool hasNum = sel != null && sel.Kind == "danish" && sel.Barcode.Length > 0;
-            bCopy.Visible = cardNum.Visible = hasNum;
-            if (hasNum && cardNum.Text != sel.Barcode) cardNum.Text = sel.Barcode;
+            bool idle = !chipBusy && (armed == null || !armed.Busy);
+            string numText = null;
+            if (AllMode())
+            {
+                List<TagView> rd = Ready();
+                bool ok = idle && Tags().Count == rd.Count && rd.Count > 0;
+                bOn.Enabled = ok && rd.Any(t => t.Afi != TagState.AFI_ON);
+                bOff.Enabled = ok && rd.Any(t => t.Afi != TagState.AFI_OFF);
+                bReset.Enabled = ok && rd.Any(t => t.Kind != "blank");
+                bOn.Visible = bOff.Visible = bReset.Visible = true;
+                numText = Tags().Count == rd.Count ? SetBarcode(rd) : null;
+            }
+            else
+            {
+                bool chipOk = sel != null && sel.Kind != "unread" && idle;
+                bOn.Enabled = chipOk && sel.Afi != TagState.AFI_ON;
+                bOff.Enabled = chipOk && sel.Afi != TagState.AFI_OFF;
+                bReset.Enabled = chipOk && sel.Kind != "blank";
+                bOn.Visible = bOff.Visible = bReset.Visible = sel != null;
+                if (sel != null && sel.Kind == "danish" && sel.Barcode.Length > 0) numText = sel.Barcode;
+            }
+            bCopy.Visible = cardNum.Visible = numText != null;
+            if (numText != null && cardNum.Text != numText) cardNum.Text = numText;
             AutoFill();
 
             int v = PartsValue();
@@ -478,6 +511,11 @@ namespace RFIDlibra
         private void PaintCard(Graphics g, TagView t, int count)
         {
             RectangleF r = new RectangleF(Px(16), Px(CardTop), Px(Split - 32), Px(CardH));
+            if (t == null && count > 1)
+            {
+                PaintAllCard(g, r);
+                return;
+            }
             if (t == null)
             {
                 using (GraphicsPath p = Look.Round(r, Px(6)))
@@ -514,11 +552,76 @@ namespace RFIDlibra
                 TextRenderer.DrawText(g, l1, f, new Rectangle(x, y + Px(44), w, Px(18)), Look.InkMuted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
                 TextRenderer.DrawText(g, l2, f, new Rectangle(x, y + Px(64), w, Px(18)), Look.InkMuted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
             }
-            string msg = chipBusy ? "Vent …" : cardMsg;
+            string msg = chipBusy ? busyText ?? "Vent …" : cardMsg;
             if (msg != null)
                 using (Font f = new Font("Segoe UI Semibold", 9f))
                     TextRenderer.DrawText(g, msg, f, new Rectangle(x, y + Px(88), w, Px(36)), chipBusy ? Look.InkMuted : cardMsgOk ? Look.Green : Look.Red,
                         TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+        }
+
+        /// <summary>Kortet, når det gælder alle chips på læseren (et sæt eller flere materialer).</summary>
+        private void PaintAllCard(Graphics g, RectangleF r)
+        {
+            List<TagView> all = Tags(), rd = Ready();
+            bool reading = all.Count > rd.Count;
+            int on = rd.Count(t => t.Afi == TagState.AFI_ON), off = rd.Count(t => t.Afi == TagState.AFI_OFF), none = rd.Count(t => t.Afi == 0), other = rd.Count - on - off - none;
+            int? stripAfi = on == rd.Count && rd.Count > 0 ? TagState.AFI_ON : off == rd.Count && rd.Count > 0 ? TagState.AFI_OFF : (int?)null;
+            using (GraphicsPath p = Look.Round(r, Px(6)))
+            {
+                using (SolidBrush b = new SolidBrush(Color.White)) g.FillPath(b, p);
+                Region keep = g.Clip;
+                g.SetClip(p);
+                using (SolidBrush b = new SolidBrush(Look.StripColor(stripAfi))) g.FillRectangle(b, r.X, r.Y, Px(8), r.Height);
+                g.Clip = keep;
+            }
+            int x = (int)r.X + Px(22), w = (int)r.Width - Px(36), y = (int)r.Y;
+            string bc = reading ? null : SetBarcode(rd);
+            string l1, l2;
+            if (reading) { l1 = "Chippene læses …"; l2 = ""; }
+            else
+            {
+                if (bc != null)
+                {
+                    int num = rd[0].Num;
+                    List<int> have = rd.Select(t => t.Seq).Distinct().ToList();
+                    List<int> miss = Enumerable.Range(1, num).Where(i => !have.Contains(i)).ToList();
+                    l1 = miss.Count == 0 ? (num == 2 ? "Begge dele" : "Alle " + num + " dele")
+                        : have.Count + " af " + num + " dele – " + (miss.Count == 1 ? "del " + miss[0] + " mangler" : PartsText(miss, num).Replace(" af " + num, "").ToLowerInvariant() + " mangler");
+                    if (rd[0].Library.Length > 0) l1 += "     " + rd[0].Library;
+                }
+                else
+                {
+                    int mats = rd.Where(t => t.Kind == "danish" && t.Barcode.Length > 0).Select(t => t.Barcode).Distinct().Count();
+                    int blank = rd.Count(t => t.Kind == "blank");
+                    l1 = (mats == 1 ? "1 materiale" : mats + " materialer") + (blank > 0 ? ", " + blank + (blank == 1 ? " tom chip" : " tomme chips") : "");
+                }
+                if (on == rd.Count) l2 = "Alarm til på alle";
+                else if (off == rd.Count) l2 = "Alarm fra på alle";
+                else
+                {
+                    List<string> parts = new List<string>();
+                    if (on > 0) parts.Add("til på " + on);
+                    if (off > 0) parts.Add("fra på " + off);
+                    if (none > 0) parts.Add("ingen på " + none);
+                    if (other > 0) parts.Add("anden/ukendt på " + other);
+                    l2 = "Alarm " + string.Join(", ", parts);
+                }
+            }
+            if (bc == null)
+                using (Font f = new Font("Bahnschrift", 17f))
+                    TextRenderer.DrawText(g, all.Count + " chips på læseren", f, new Rectangle(x, y + Px(10), w, Px(30)), Look.Ink,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            using (Font f = new Font("Segoe UI", 9f))
+            {
+                TextRenderer.DrawText(g, l1, f, new Rectangle(x, y + Px(44), w, Px(18)), Look.InkMuted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                TextRenderer.DrawText(g, l2, f, new Rectangle(x, y + Px(64), w, Px(18)), Look.InkMuted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            }
+            string msg = chipBusy ? busyText ?? "Vent …" : cardMsg;
+            bool hint = msg == null;
+            if (hint) msg = "Knapperne gælder alle " + all.Count + ". Klik på en chip ovenfor for kun at vælge den.";
+            using (Font f = new Font(hint ? "Segoe UI" : "Segoe UI Semibold", hint ? 8.5f : 9f))
+                TextRenderer.DrawText(g, msg, f, new Rectangle(x, y + Px(88), w, Px(36)), hint || chipBusy ? Look.InkMuted : cardMsgOk ? Look.Green : Look.Red,
+                    TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
         }
 
         private void PaintRight(Graphics g)
@@ -601,6 +704,7 @@ namespace RFIDlibra
         private void Note(string cls, string title, string text, int seconds)
         {
             doneCls = cls; doneMsg = title; doneText = text; doneUntil = DateTime.Now.AddSeconds(seconds);
+            noteUids = null;
             Step();
         }
 
@@ -613,7 +717,8 @@ namespace RFIDlibra
             for (int i = 0; i < Math.Min(tags.Count, MaxLabels); i++)
                 if (R(16, LabelsTop + i * (LabelH + LabelGap), Split - 32, LabelH).Contains(e.Location))
                 {
-                    selected = tags[i].Uid;
+                    // Klik på den valgte chip igen: tilbage til alle chips
+                    selected = selected == tags[i].Uid && tags.Count > 1 ? null : tags[i].Uid;
                     cardMsg = null;
                     Render();
                     return;
@@ -632,6 +737,7 @@ namespace RFIDlibra
 
         private async void ChipAction(string what)
         {
+            if (AllMode()) { BulkAction(what); return; }
             TagView t = Selected();
             if (t == null || chipBusy) return;
             if (what == "reset" && MessageBox.Show(this, "Nulstil chippen " + Look.Title(t) + "?\n\nMaterialenummer og alarm slettes, så chippen bliver tom.",
@@ -649,11 +755,53 @@ namespace RFIDlibra
             Tick();
         }
 
+        /// <summary>Alarm til/fra eller nulstil på alle chips på læseren - et helt sæt eller mange materialer, fx ved kassation.</summary>
+        private async void BulkAction(string what)
+        {
+            List<TagView> rd = Ready();
+            if (chipBusy || rd.Count == 0 || Tags().Count != rd.Count) return;
+            List<TagView> targets = what == "reset" ? rd.Where(t => t.Kind != "blank").ToList()
+                : rd.Where(t => t.Afi != (what == "on" ? TagState.AFI_ON : TagState.AFI_OFF)).ToList();
+            if (targets.Count == 0) return;
+            if (what == "reset")
+            {
+                string bc = SetBarcode(rd);
+                string which = bc != null ? (rd.Count == 2 ? "begge dele af " + bc : "alle " + rd.Count + " dele af " + bc)
+                    : "alle " + targets.Count + " chips";
+                if (MessageBox.Show(this, "Nulstil " + which + "?\n\nMaterialenummer og alarm slettes, så chippene bliver tomme.",
+                    "Nulstil chips", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            }
+            string verb = what == "reset" ? "Nulstiller" : what == "on" ? "Slår alarm til på" : "Slår alarm fra på";
+            chipBusy = true;
+            cardMsg = null;
+            List<string> fails = new List<string>();
+            for (int i = 0; i < targets.Count; i++)
+            {
+                busyText = verb + " " + (i + 1) + " af " + targets.Count + " …";
+                Render();
+                string mac = targets[i].Uid, title = Look.Title(targets[i]);
+                Worker.ToolResult r = await Task.Run(() => what == "reset" ? app.ToolReset(mac) : app.ToolAlarm(mac, what == "on"));
+                if (IsDisposed) return;
+                if (!r.Ok) fails.Add(title + ": " + r.Message);
+            }
+            chipBusy = false;
+            busyText = null;
+            int okCount = targets.Count - fails.Count;
+            string done = what == "reset" ? "Nulstillet" : what == "on" ? "Alarm slået til på" : "Alarm slået fra på";
+            cardMsg = fails.Count == 0 ? done + " " + (targets.Count == 1 ? "1 chip" : targets.Count + " chips") + " ✓"
+                : done + " " + okCount + " af " + targets.Count + ". Fejl: " + fails[0] + (fails.Count > 1 ? " (+" + (fails.Count - 1) + " mere)" : "");
+            cardMsgOk = fails.Count == 0;
+            cardMsgUntil = DateTime.Now.AddSeconds(fails.Count == 0 ? 4 : 12);
+            key = "";
+            Tick();
+        }
+
         private void CopyNumber()
         {
             TagView t = Selected();
-            if (t == null || t.Barcode.Length == 0) return;
-            try { Clipboard.SetText(t.Barcode); cardMsg = "Kopieret ✓"; cardMsgOk = true; }
+            string num = t != null ? t.Barcode : AllMode() ? SetBarcode(Ready()) : null;
+            if (string.IsNullOrEmpty(num)) return;
+            try { Clipboard.SetText(num); cardMsg = "Kopieret ✓"; cardMsgOk = true; }
             catch (Exception e) { cardMsg = "Kunne ikke kopiere: " + e.Message; cardMsgOk = false; }
             cardMsgUntil = DateTime.Now.AddSeconds(2);
             Invalidate();
@@ -661,29 +809,41 @@ namespace RFIDlibra
 
         /// <summary>
         /// Ligger der en chip med materialenummer på læseren, kommer nummeret i skrivefeltet (markeret), og antal dele følger chippen.
-        /// Det, brugeren selv har skrevet, overskrives aldrig. Et hentet nummer forsvinder igen, når chippen tages af.
+        /// Feltet følger altid chippene: skiftes de, skiftes nummer og antal dele også - og tages de af, tømmes feltet.
+        /// Det, brugeren selv har skrevet, overskrives aldrig.
         /// </summary>
         private void AutoFill()
         {
             if (armed != null) return;
-            List<TagView> withNum = Ready().Where(t => t.Kind == "danish" && t.Barcode.Length > 0).ToList();
-            string bc = withNum.Count > 0 && withNum.Select(t => t.Barcode).Distinct().Count() == 1 ? withNum[0].Barcode : null;
+            List<TagView> rd = Ready();
+            if (Tags().Count > rd.Count) return;   // vent, til alle chips er læst
+            string k = string.Join(",", rd.Select(t => t.Uid + ":" + t.Kind + ":" + t.Barcode + ":" + t.Seq + "/" + t.Num));
+            if (k == autoKey) return;
+            autoKey = k;
             string cur = inBarcode.Text.Trim();
-            bool typedByUser = cur.Length > 0 && cur != lastAutoBc;
-            if (bc == lastAutoBc) return;
-            if (typedByUser) { lastAutoBc = bc; return; }
+            if (cur.Length > 0 && cur != lastAutoBc)
+            {
+                // Brugerens egen tekst bliver stående - men et antal dele, der kom fra de forrige chips, gør ikke
+                if (numAuto) { numUser = null; numAuto = false; }
+                lastAutoBc = null;
+                return;
+            }
+            List<TagView> withNum = rd.Where(t => t.Kind == "danish" && t.Barcode.Length > 0).ToList();
+            string bc = withNum.Count > 0 && withNum.Select(t => t.Barcode).Distinct().Count() == 1 ? withNum[0].Barcode : null;
             if (bc != null)
             {
                 inBarcode.Text = bc;
                 int n = withNum[0].Num;
                 numUser = n > 1 ? n : (int?)null;
+                numAuto = numUser != null;
                 if (ContainsFocus || ActiveForm == this) inBarcode.Focus();
                 inBarcode.SelectAll();
             }
-            else if (cur == lastAutoBc)
+            else
             {
-                inBarcode.Text = "";
+                if (cur.Length > 0) inBarcode.Text = "";
                 numUser = null;
+                numAuto = false;
             }
             lastAutoBc = bc;
         }
@@ -772,7 +932,8 @@ namespace RFIDlibra
             if (!st.ReaderOk) { ShowBox("err", "Ingen forbindelse til læseren", st.ReaderText); return; }
             if (a.Busy)
             {
-                ShowBox("", a.Num > 1 ? "Programmerer " + PartsText(a.Batch.Select(j => j.Seq), a.Num).ToLowerInvariant() + " …" : "Programmerer chippen …", "Materialenummer " + a.Barcode);
+                ShowBox("", a.Batch.Count > 1 ? "Programmerer " + a.Batch.Count + " dele …"
+                    : a.Num > 1 ? "Programmerer " + PartsText(a.Batch.Select(j => j.Seq), a.Num).ToLowerInvariant() + " …" : "Programmerer chippen …", "Materialenummer " + a.Barcode);
                 return;
             }
             List<TagView> ready = Ready();
@@ -887,9 +1048,14 @@ namespace RFIDlibra
             {
                 armed = null;
                 numUser = null;
+                numAuto = false;
                 inBarcode.Text = "";
+                autoKey = null;        // skrivefeltet viser nu det nye nummer fra chippene
+                lastAutoBc = null;
                 Render();
-                Note("ok", a.Num > 1 ? "Alle " + a.Num + " dele er programmeret ✓" : "Programmeret ✓", "Materialenummer " + a.Barcode + ". Alarmen er slået til.", 5);
+                Note("ok", a.Num == 2 ? "Begge dele er programmeret ✓" : a.Num > 2 ? "Alle " + a.Num + " dele er programmeret ✓" : "Programmeret ✓",
+                    "Materialenummer " + a.Barcode + ". Alarmen er slået til.", 5);
+                noteUids = new HashSet<string>(st.ReaderOk ? st.Tags.Select(t => t.Uid) : Enumerable.Empty<string>());
                 inBarcode.Focus();
             }
             else Render();
