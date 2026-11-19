@@ -54,6 +54,37 @@ namespace RFIDlibra
         [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
         [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int cmd);
         [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        private static readonly string[] Pages = { "indstillinger", "fejlfinding", "vaerktoej", "laeser" };
+
+        /// <summary>
+        /// Lukker programmets egne Edge-vinduer (Indstillinger, Fejlfinding ...), når RFIDlibra afsluttes.
+        /// Kun vinduer, hvis titel er præcis sidens titel - et almindeligt Edge-vindue har " - Microsoft Edge" efter titlen
+        /// og røres derfor ikke, så brugerens andre faner aldrig lukkes.
+        /// </summary>
+        public static int CloseAll()
+        {
+            int closed = 0;
+            try
+            {
+                EnumWindows((h, l) =>
+                {
+                    if (!IsWindowVisible(h)) return true;
+                    StringBuilder cls = new StringBuilder(64);
+                    GetClassName(h, cls, cls.Capacity);
+                    if (!cls.ToString().StartsWith("Chrome_WidgetWin")) return true;
+                    StringBuilder t = new StringBuilder(256);
+                    GetWindowText(h, t, t.Capacity);
+                    string title = t.ToString();
+                    foreach (string p in Pages)
+                        if (title == PageTitle(p)) { PostMessage(h, 0x0010 /* WM_CLOSE */, IntPtr.Zero, IntPtr.Zero); closed++; break; }
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch (Exception) { }
+            return closed;
+        }
 
         /// <summary>Vinduestitlerne, siderne sætter selv (ui/index.html: "RFIDlibra – " + sidens navn).</summary>
         private static string PageTitle(string page)

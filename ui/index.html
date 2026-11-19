@@ -523,7 +523,7 @@
     <div class="row"><button class="btn" id="mNo">Annullér</button><button class="btn primary" id="mYes"></button></div>
   </div>
 </div>
-<div id="lost"><div><strong>RFIDlibra kører ikke</strong>Start programmet igen fra Start-menuen. Vinduet finder selv forbindelsen, når det kører.</div></div>
+<div id="lost"><div><strong>RFIDlibra kører ikke længere</strong>Du kan lukke vinduet. Start RFIDlibra igen, og åbn siden fra menuen i skrankevinduet eller ved uret.</div></div>
 
 <script>
 "use strict";
@@ -980,7 +980,9 @@ $("libChips").addEventListener("click", e => { const b = e.target.closest("[data
 let failures = 0;
 async function poll() {
   try {
-    S = await api("state");
+    const st = await api("state");
+    if (!st || !st.reader) throw new Error("RFIDlibra kører ikke (eller er startet igen med en ny nøgle)");
+    S = st;
     failures = 0;
     $("lost").classList.remove("show");
     renderTop();

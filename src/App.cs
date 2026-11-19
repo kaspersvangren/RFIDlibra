@@ -13,7 +13,7 @@ namespace RFIDlibra
 {
     public static class AppInfo
     {
-        public const string Version = "1.0.0";
+        public const string Version = "1.0.1";
 
         public static string DataDir
         {
@@ -402,6 +402,8 @@ namespace RFIDlibra
         {
             timer.Stop();
             Log.Write("Afslutter.");
+            int closed = Launcher.CloseAll();
+            if (closed > 0) Log.Write("Lukkede " + closed + " vindue(r) med Indstillinger/Fejlfinding.");
             Worker w = Worker;
             if (w != null) w.Stop();
             server.Stop();
