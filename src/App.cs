@@ -13,7 +13,7 @@ namespace RFIDlibra
 {
     public static class AppInfo
     {
-        public const string Version = "1.1.0";
+        public const string Version = "1.1.1";
 
         public static string DataDir
         {

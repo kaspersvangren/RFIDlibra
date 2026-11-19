@@ -318,7 +318,8 @@ namespace RFIDlibra
                 }
                 items.Add(it);
             }
-            return items;
+            // Materialer, der mangler dele, øverst - så de aldrig gemmer sig under "+N mere"
+            return items.Where(i => i.PartsMissing).Concat(items.Where(i => !i.PartsMissing)).ToList();
         }
 
         // Lodrette mål (ved 96 dpi)
@@ -438,7 +439,7 @@ namespace RFIDlibra
             if (tags.Count > MaxLabels)
             {
                 using (Font f = new Font("Segoe UI", 8.5f))
-                    TextRenderer.DrawText(g, "+" + (tags.Count - MaxLabels) + " mere", f, new Rectangle(Px(M), Px(y + 2), Px(BaseWidth - 2 * M), Px(MoreH)), TextMuted,
+                    TextRenderer.DrawText(g, "+" + (tags.Count - MaxLabels) + " mere" + MoreMissing(tags), f, new Rectangle(Px(M), Px(y + 2), Px(BaseWidth - 2 * M), Px(MoreH)), TextMuted,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
 
@@ -448,6 +449,13 @@ namespace RFIDlibra
             DrawButton(g, btnOn, "Alarm til", Amber, Ink, enabled, hover == 2, busy == 2);
 
             PaintEdge(g, all);
+        }
+
+        /// <summary>" (1 mangler dele)", hvis nogle af de skjulte materialer mangler dele.</summary>
+        private static string MoreMissing(List<Item> tags)
+        {
+            int n = tags.Skip(MaxLabels).Count(i => i.PartsMissing);
+            return n > 0 ? " (" + n + " mangler dele)" : "";
         }
 
         private void PaintEdge(Graphics g, Rectangle all)
@@ -474,6 +482,8 @@ namespace RFIDlibra
             Color warn = Color.FromArgb(0xff, 0xa0, 0xa8);
             if (message != null) { ink = warn; return message; }
             List<Item> items = Items();
+            int missCount = items.Count(i => i.PartsMissing);
+            if (missCount > 1) { ink = warn; return missCount + " sæt mangler dele"; }
             Item miss = items.FirstOrDefault(i => i.PartsMissing);
             if (miss != null)
             {
