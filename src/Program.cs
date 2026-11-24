@@ -15,7 +15,7 @@ namespace RFIDlibra
         private static void Main(string[] args)
         {
             // Administrator-delen af "Installer/fjern for alle brugere" (startet af programmet selv med runas)
-            if (args.Length > 0 && (args[0] == AllUsers.InstallArg || args[0] == AllUsers.RemoveArg))
+            if (args.Length > 0 && (args[0] == AllUsers.InstallArg || args[0] == AllUsers.RemoveArg || args[0] == AllUsers.GateArg))
             {
                 Environment.Exit(AllUsers.RunAsAdmin(args));
                 return;

@@ -18,6 +18,7 @@ namespace RFIDlibra
     {
         public const string InstallArg = "--installer-alle";
         public const string RemoveArg = "--fjern-alle";
+        public const string GateArg = "--gem-porte-alle";
 
         public static string Dir
         {
@@ -68,10 +69,32 @@ namespace RFIDlibra
         /// <summary>Starter en kopi af programmet som administrator og venter på den. Returnerer en besked til brugeren.</summary>
         public static string RunElevated(bool install, string library, out bool ok)
         {
-            ok = false;
-            string me = Assembly.GetExecutingAssembly().Location;
             string lib = new string((library ?? "").Where(char.IsLetterOrDigit).ToArray());
             string args = install ? InstallArg + (lib.Length > 0 ? " " + lib : "") : RemoveArg;
+            string err = Elevate(args, out ok);
+            if (err != null) return err;
+            string last = LastLogLine();
+            if (ok) return install
+                ? "RFIDlibra er installeret for alle brugere på denne pc. Den starter derfra, næste gang nogen logger på."
+                : "RFIDlibra er fjernet for alle brugere på denne pc.";
+            return "Det lykkedes ikke" + (last.Length > 0 ? ": " + last : ".");
+        }
+
+        /// <summary>Gemmer brugerens gatealarm-indstillinger til alle brugere på pc'en (kræver administrator).</summary>
+        public static string SaveGateForAll(string userFile, out bool ok)
+        {
+            string err = Elevate(GateArg + " \"" + userFile + "\"", out ok);
+            if (err != null) return err;
+            if (ok) return "Gatealarmerne er gemt for alle brugere på pc'en. Brugere, der selv har gemt indstillinger, beholder deres egne.";
+            string last = LastLogLine();
+            return "Det lykkedes ikke" + (last.Length > 0 ? ": " + last : ".");
+        }
+
+        /// <summary>Starter en kopi af programmet som administrator og venter. Returnerer en fejltekst, eller null hvis den kørte.</summary>
+        private static string Elevate(string args, out bool ok)
+        {
+            ok = false;
+            string me = Assembly.GetExecutingAssembly().Location;
             try
             {
                 // Det forreste vindue (Edge-vinduet med Indstillinger) som "ejer", så Windows' spørgsmål om administrator kommer frem foran
@@ -88,11 +111,7 @@ namespace RFIDlibra
                 if (e.NativeErrorCode == 1223) return "Annulleret - der blev ikke givet administratoradgang.";
                 return "Det lykkedes ikke at starte som administrator: " + e.Message;
             }
-            string last = LastLogLine();
-            if (ok) return install
-                ? "RFIDlibra er installeret for alle brugere på denne pc. Den starter derfra, næste gang nogen logger på."
-                : "RFIDlibra er fjernet for alle brugere på denne pc.";
-            return "Det lykkedes ikke" + (last.Length > 0 ? ": " + last : ".");
+            return null;
         }
 
         private static string LastLogLine()
@@ -131,6 +150,7 @@ namespace RFIDlibra
             try
             {
                 if (args[0] == InstallArg) Install(args.Length > 1 ? args[1] : "");
+                else if (args[0] == GateArg) SaveGate(args.Length > 1 ? args[1] : "");
                 else Remove();
                 return 0;
             }
@@ -193,6 +213,14 @@ namespace RFIDlibra
                 Write("Biblioteksnummer til hele pc'en: " + library);
             }
             Write("Færdig");
+        }
+
+        private static void SaveGate(string userFile)
+        {
+            if (!File.Exists(userFile)) throw new FileNotFoundException("indstillingerne blev ikke fundet: " + userFile);
+            Directory.CreateDirectory(MachineDataDir);
+            File.Copy(userFile, Path.Combine(MachineDataDir, GateSettings.FileName), true);
+            Write("Gatealarmer gemt for alle brugere i " + MachineDataDir);
         }
 
         private static void Remove()

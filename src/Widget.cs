@@ -19,6 +19,7 @@ namespace RFIDlibra
         public string BindError;
         public bool StaffConnect;
         public TagView[] Tags = new TagView[0];
+        public GateView Gates;           // null, når gatealarmer er slået fra
     }
 
     /// <summary>Hvor skrankevinduet får sine data fra (App, eller en testopstilling).</summary>
@@ -26,6 +27,7 @@ namespace RFIDlibra
     {
         WidgetState GetWidgetState();
         string AlarmAll(bool on);
+        void OpenAlarms(int gate);
     }
 
     /// <summary>
@@ -76,6 +78,10 @@ namespace RFIDlibra
         private readonly ToolStripMenuItem compactItem;
         private readonly ToolTip tip = new ToolTip { ShowAlways = true, InitialDelay = 300, AutoPopDelay = 15000 };
         private string tipText;
+        private readonly ToolTip lampTip = new ToolTip { OwnerDraw = true, UseAnimation = false, UseFading = false };
+        private Rectangle[] lampRects = new Rectangle[0];   // klik- og museområde pr. lampe
+        private int hoverLamp = -1;
+        private string lampTipKey;
 
         public Widget(IWidgetSource app, ContextMenuStrip menu)
         {
@@ -102,6 +108,8 @@ namespace RFIDlibra
             Location = LoadPosition();
             savedAt = Location;
 
+            lampTip.Popup += (o, e) => e.ToolTipSize = LampTipSize();
+            lampTip.Draw += (o, e) => DrawLampTip(e.Graphics, e.Bounds);
             timer.Tick += (o, e) => Tick();
             flashTimer.Tick += (o, e) => { Invalidate(); if ((DateTime.Now - flashStart).TotalMilliseconds > 900) flashTimer.Stop(); };
             timer.Start();
@@ -207,8 +215,10 @@ namespace RFIDlibra
             WidgetState n = app.GetWidgetState();
             DetectAlarmChange(n);
             string k = compact + "|" + n.ReaderOk + "|" + n.ReaderText + "|" + n.Listening + "|" + n.BindError + "|" + n.StaffConnect + "|" + busy + "|" + message + "|"
-                + string.Join(",", n.Tags.Select(t => t.Uid + t.Kind + t.Barcode + t.Seq + "/" + t.Num + t.Afi));
+                + string.Join(",", n.Tags.Select(t => t.Uid + t.Kind + t.Barcode + t.Seq + "/" + t.Num + t.Afi))
+                + "|" + LampKey(n.Gates);
             st = n;
+            RefreshLampTip();
             if (k == key) return;
             key = k;
             Arrange();
@@ -324,22 +334,40 @@ namespace RFIDlibra
 
         // Lodrette mål (ved 96 dpi)
         private const int M = 8, HeadH = 30, SubH = 16, LabelH = 34, LabelGap = 4, MoreH = 20, BtnH = 30;
+        // Gatelamper: vandrette øverst i normal visning, lodrette i venstre kant i kompakt visning
+        private const int LampTop = 7, LampH = 7, LampGap = 5;
+        private const int CLampX = 9, CLampW = 5, CLampGap = 3, CLampTop = 7;
+
+        private static int LampBand(int lamps) { return lamps > 0 ? LampTop + LampH + 2 : 0; }
+        private static int CompactLampsW(int lamps) { return lamps > 0 ? lamps * (CLampW + CLampGap) + 6 : 0; }
 
         private void Arrange()
         {
             UpdateTip();
+            int lamps = st.Gates != null ? st.Gates.Lamps.Count : 0;
             if (compact)
             {
-                btnOff = new Rectangle(Px(CompactW - 8 - 2 * 42 - 4), Px(5), Px(42), Px(24));
-                btnOn = new Rectangle(Px(CompactW - 8 - 42), Px(5), Px(42), Px(24));
+                int cw = CompactW + CompactLampsW(lamps);
+                btnOff = new Rectangle(Px(cw - 8 - 2 * 42 - 4), Px(5), Px(42), Px(24));
+                btnOn = new Rectangle(Px(cw - 8 - 42), Px(5), Px(42), Px(24));
                 btnMenu = Rectangle.Empty;
-                if (Width != Px(CompactW)) Width = Px(CompactW);
+                lampRects = new Rectangle[lamps];
+                for (int i = 0; i < lamps; i++) lampRects[i] = new Rectangle(Px(CLampX + i * (CLampW + CLampGap) - 1), 0, Px(CLampW + CLampGap), Px(CompactH));
+                if (Width != Px(cw)) Width = Px(cw);
                 if (Height != Px(CompactH)) Height = Px(CompactH);
                 return;
             }
             if (Width != Px(BaseWidth)) Width = Px(BaseWidth);
+            int oy = LampBand(lamps);
+            lampRects = new Rectangle[lamps];
+            if (lamps > 0)
+            {
+                float lw = (BaseWidth - 2 * M - (lamps - 1) * LampGap) / (float)lamps;
+                for (int i = 0; i < lamps; i++)
+                    lampRects[i] = new Rectangle(Px(M + i * (lw + LampGap) - LampGap / 2f), 0, Px(lw + LampGap), Px(LampTop + LampH + 4));
+            }
             Color dummy;
-            int y = HeadH + (Subline(out dummy) != null ? SubH : 0) + 2;
+            int y = oy + HeadH + (Subline(out dummy) != null ? SubH : 0) + 2;
             int count = st.ReaderOk ? Items().Count : 0;
             int n = Math.Min(count, MaxLabels);
             if (n == 0) y += LabelH;
@@ -350,7 +378,7 @@ namespace RFIDlibra
             btnOff = new Rectangle(Px(M), Px(y), Px(bw), Px(BtnH));
             btnOn = new Rectangle(Px(M + bw + 8), Px(y), Px(bw), Px(BtnH));
             y += BtnH + M;
-            btnMenu = new Rectangle(Px(BaseWidth - 32), Px(4), Px(26), Px(22));
+            btnMenu = new Rectangle(Px(BaseWidth - 32), Px(oy + 4), Px(26), Px(22));
             int h = Px(y);
             if (Height != h) Height = h;
         }
@@ -391,12 +419,15 @@ namespace RFIDlibra
 
             if (compact) { PaintCompact(g, all); return; }
 
+            int oy = LampBand(st.Gates != null ? st.Gates.Lamps.Count : 0);
+            PaintLamps(g);
+
             // Overskrift
             Color dot;
             string head = Headline(out dot);
-            using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, Px(M + 3), Px(11), Px(9), Px(9));
+            using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, Px(M + 3), Px(oy + 11), Px(9), Px(9));
             using (Font f = new Font("Segoe UI Semibold", 10f))
-                TextRenderer.DrawText(g, head, f, new Rectangle(Px(M + 18), Px(4), Px(BaseWidth - 76), Px(22)), TextLight,
+                TextRenderer.DrawText(g, head, f, new Rectangle(Px(M + 18), Px(oy + 4), Px(BaseWidth - 76), Px(22)), TextLight,
                     TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
             // Menu-prikker
@@ -405,7 +436,7 @@ namespace RFIDlibra
                 for (int i = -1; i <= 1; i++)
                     g.FillEllipse(b, btnMenu.X + btnMenu.Width / 2f + i * Px(6) - Px(1.6f), btnMenu.Y + btnMenu.Height / 2f - Px(1.6f), Px(3.2f), Px(3.2f));
 
-            int y = HeadH;
+            int y = oy + HeadH;
             Color subColor;
             string sub = Subline(out subColor);
             if (sub != null)
@@ -499,9 +530,11 @@ namespace RFIDlibra
         {
             Color dot, ink;
             string text = CompactText(out dot, out ink);
-            using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, Px(11), Px(13), Px(8), Px(8));
+            int lx = CompactLampsW(st.Gates != null ? st.Gates.Lamps.Count : 0);
+            PaintLamps(g);
+            using (SolidBrush b = new SolidBrush(dot)) g.FillEllipse(b, Px(lx + 11), Px(13), Px(8), Px(8));
             using (Font f = new Font("Segoe UI Semibold", 9.5f))
-                TextRenderer.DrawText(g, text, f, new Rectangle(Px(25), 0, btnOff.Left - Px(29), all.Height), ink,
+                TextRenderer.DrawText(g, text, f, new Rectangle(Px(lx + 25), 0, btnOff.Left - Px(lx + 29), all.Height), ink,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
             bool enabled = HasReadTags && busy == 0;
             DrawButton(g, btnOff, "Fra", Green, Color.White, enabled, hover == 1, busy == 1, 9f);
@@ -561,6 +594,174 @@ namespace RFIDlibra
                 TextRenderer.DrawText(g, working ? (compact ? "…" : "Vent …") : text, f, r, tc, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
+        // ---------- Gatelamper ----------
+
+        private static readonly Color LampRed = Color.FromArgb(0xff, 0x4d, 0x5e);
+        private static readonly Color LampYellow = Color.FromArgb(0xf7, 0xb7, 0x2b);
+
+        /// <summary>Rød blinker hurtigt, gul langsomt.</summary>
+        private static bool Lit(LampState state)
+        {
+            long ms = Environment.TickCount & int.MaxValue;
+            return state == LampState.Red ? (ms / 250) % 2 == 0 : (ms / 600) % 2 == 0;
+        }
+
+        private static string LampKey(GateView g)
+        {
+            if (g == null) return "";
+            return g.Connected + ":" + string.Join(",", g.Lamps.Select(l => l.Gate + l.Name + l.State
+                + (l.State == LampState.Red || l.State == LampState.Yellow ? (Lit(l.State) ? "+" : "-") : "")));
+        }
+
+        private Color LampColor(LampView l, out bool glow)
+        {
+            glow = false;
+            switch (l.State)
+            {
+                case LampState.Red: glow = Lit(l.State); return glow ? LampRed : Mix(Bg, LampRed, 0.32f);
+                case LampState.Yellow: glow = Lit(l.State); return glow ? LampYellow : Mix(Bg, LampYellow, 0.32f);
+                case LampState.Idle: return Mix(Bg, Green, 0.85f);
+                default: return Mix(Bg, Grey, 0.38f);
+            }
+        }
+
+        private RectangleF LampBar(int i, int count)
+        {
+            if (compact) return new RectangleF(Px(CLampX + i * (CLampW + CLampGap)), Px(CLampTop), Px(CLampW), Px(CompactH - 2 * CLampTop));
+            float lw = (BaseWidth - 2 * M - (count - 1) * LampGap) / (float)count;
+            return new RectangleF(Px(M + i * (lw + LampGap)), Px(LampTop), Px(lw), Px(LampH));
+        }
+
+        private void PaintLamps(Graphics g)
+        {
+            if (st.Gates == null) return;
+            List<LampView> lamps = st.Gates.Lamps;
+            for (int i = 0; i < lamps.Count; i++)
+            {
+                RectangleF r = LampBar(i, lamps.Count);
+                bool glow;
+                Color c = LampColor(lamps[i], out glow);
+                float rad = Math.Min(r.Width, r.Height) / 2f;
+                if (glow)
+                {
+                    RectangleF gr = RectangleF.Inflate(r, Px(2.5f), Px(2.5f));
+                    using (GraphicsPath p = Round(gr, rad + Px(2.5f)))
+                    using (SolidBrush b = new SolidBrush(Color.FromArgb(80, c))) g.FillPath(b, p);
+                }
+                using (GraphicsPath p = Round(r, rad))
+                {
+                    using (SolidBrush b = new SolidBrush(c)) g.FillPath(b, p);
+                    if (i == hoverLamp) using (Pen pen = new Pen(Color.FromArgb(150, 255, 255, 255), Px(1))) g.DrawPath(pen, p);
+                }
+            }
+        }
+
+        private int LampAt(Point p)
+        {
+            for (int i = 0; i < lampRects.Length; i++) if (lampRects[i].Contains(p)) return i;
+            return -1;
+        }
+
+        private LampView HoveredLamp
+        {
+            get { return st.Gates != null && hoverLamp >= 0 && hoverLamp < st.Gates.Lamps.Count ? st.Gates.Lamps[hoverLamp] : null; }
+        }
+
+        private string TipKeyFor(LampView l)
+        {
+            if (l == null) return null;
+            return l.Gate + l.Name + st.Gates.Connected + string.Join(",", l.Recent.Select(a => a.Seq + a.StatusText + a.Title));
+        }
+
+        private void SetHoverLamp(int i)
+        {
+            if (i == hoverLamp) return;
+            hoverLamp = i;
+            Invalidate();
+            if (i < 0) { lampTip.Hide(this); lampTipKey = null; tip.Active = true; return; }
+            tip.Hide(this);
+            tip.Active = false;
+            ShowLampTip();
+        }
+
+        private void ShowLampTip()
+        {
+            LampView l = HoveredLamp;
+            if (l == null) return;
+            lampTipKey = TipKeyFor(l);
+            Size sz = LampTipSize();
+            Rectangle lr = lampRects[hoverLamp];
+            Point at = compact ? new Point(lr.X, Height + Px(4)) : new Point(lr.X, lr.Bottom + Px(2));
+            Point scr = PointToScreen(at);
+            Rectangle wa = Screen.FromControl(this).WorkingArea;
+            if (scr.Y + sz.Height > wa.Bottom) scr.Y = PointToScreen(Point.Empty).Y - sz.Height - Px(4);
+            if (scr.X + sz.Width > wa.Right) scr.X = wa.Right - sz.Width;
+            if (scr.X < wa.Left) scr.X = wa.Left;
+            Point c = PointToClient(scr);
+            lampTip.Show(" ", this, c.X, c.Y, 30000);
+        }
+
+        /// <summary>Opdaterer musens forklaring, hvis der er kommet en ny alarm, mens musen står over lampen.</summary>
+        private void RefreshLampTip()
+        {
+            if (hoverLamp < 0) return;
+            if (st.Gates == null || hoverLamp >= lampRects.Length) { SetHoverLamp(-1); return; }
+            string k = TipKeyFor(HoveredLamp);
+            if (k != lampTipKey) ShowLampTip();
+        }
+
+        private const int TipW = 320, TipPad = 10, TipHead = 22, TipRow = 38, TipFoot = 20;
+
+        private Size LampTipSize()
+        {
+            LampView l = HoveredLamp;
+            int rows = l == null ? 0 : l.Recent.Count;
+            int h = TipPad + TipHead + (rows == 0 ? 20 : rows * TipRow) + TipFoot + TipPad - 4;
+            return new Size(Px(TipW), Px(h));
+        }
+
+        private void DrawLampTip(Graphics g, Rectangle b)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (SolidBrush br = new SolidBrush(Paper)) g.FillRectangle(br, b);
+            using (Pen p = new Pen(Edge)) g.DrawRectangle(p, b.X, b.Y, b.Width - 1, b.Height - 1);
+            LampView l = HoveredLamp;
+            if (l == null) return;
+            int x = Px(TipPad + 2), w = b.Width - Px(2 * TipPad + 4), y = Px(TipPad);
+            using (Font f = new Font("Segoe UI Semibold", 10f))
+                TextRenderer.DrawText(g, l.Name, f, new Rectangle(x, y, w, Px(TipHead - 2)), Ink, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            y += Px(TipHead);
+            using (Font small = new Font("Segoe UI", 8.5f))
+            using (Font bold = new Font("Segoe UI Semibold", 9f))
+            using (Font time = new Font("Bahnschrift", 9.5f))
+            {
+                if (l.Recent.Count == 0)
+                {
+                    string none = st.Gates.Connected ? "Ingen alarmer, siden RFIDlibra startede" : "Ingen forbindelse til gatetrackeren";
+                    TextRenderer.DrawText(g, none, small, new Rectangle(x, y, w, Px(18)), InkMuted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                    y += Px(20);
+                }
+                foreach (GateAlarm a in l.Recent)
+                {
+                    Color c = AlarmWindow.AlarmColor(a);
+                    using (SolidBrush br = new SolidBrush(c)) g.FillEllipse(br, x, y + Px(5), Px(9), Px(9));
+                    int tx = x + Px(16), tw = Px(40);
+                    TextRenderer.DrawText(g, a.Time.ToString("HH:mm", CultureInfo.InvariantCulture), time, new Rectangle(tx, y, tw, Px(18)), Ink,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                    int x2 = tx + tw, w2 = b.Width - x2 - Px(TipPad);
+                    TextRenderer.DrawText(g, a.TitleLine, bold, new Rectangle(x2, y, w2, Px(18)), Ink,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                    Color sc = a.Loaned == true ? Color.FromArgb(0xa9, 0x6c, 0x00) : a.Done || a.ShownAt != null ? Color.FromArgb(0xc2, 0x3b, 0x22) : InkMuted;
+                    string line2 = a.StatusText + (a.Barcode.Length > 0 ? "  ·  " + a.Barcode : "");
+                    TextRenderer.DrawText(g, line2, small, new Rectangle(x2, y + Px(17), w2, Px(16)), sc,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                    y += Px(TipRow);
+                }
+                TextRenderer.DrawText(g, "Dobbeltklik for alle alarmer", small, new Rectangle(x, y, w, Px(TipFoot)), InkMuted,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            }
+        }
+
         // ---------- Mus ----------
 
         private int HitTest(Point p)
@@ -574,8 +775,9 @@ namespace RFIDlibra
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            SetHoverLamp(LampAt(e.Location));
             int h = HitTest(e.Location);
-            bool clickable = h == 3 || (h != 0 && HasReadTags && busy == 0);
+            bool clickable = h == 3 || (h != 0 && HasReadTags && busy == 0) || hoverLamp >= 0;
             Cursor = clickable ? Cursors.Hand : Cursors.Default;
             if (h != hover) { hover = h; Invalidate(); }
         }
@@ -583,6 +785,7 @@ namespace RFIDlibra
         protected override void OnMouseLeave(EventArgs e)
         {
             base.OnMouseLeave(e);
+            SetHoverLamp(-1);
             if (hover != 0) { hover = 0; Invalidate(); }
         }
 
@@ -594,6 +797,12 @@ namespace RFIDlibra
             int h = HitTest(e.Location);
             if (h == 3) { ShowMenu(new Point(btnMenu.Left, btnMenu.Bottom)); return; }
             if (h == 1 || h == 2) { SetAlarm(h == 2); return; }
+            int lamp = LampAt(e.Location);
+            if (lamp >= 0 && st.Gates != null && lamp < st.Gates.Lamps.Count)
+            {
+                if (e.Clicks >= 2) { SetHoverLamp(-1); app.OpenAlarms(st.Gates.Lamps[lamp].Gate); }
+                return;   // lamperne trækker ikke i vinduet, så dobbeltklik kan nås
+            }
             // Træk i vinduet
             ReleaseCapture();
             SendMessage(Handle, 0xA1 /* WM_NCLBUTTONDOWN */, (IntPtr)2 /* HTCAPTION */, IntPtr.Zero);
@@ -636,7 +845,7 @@ namespace RFIDlibra
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { timer.Dispose(); flashTimer.Dispose(); tip.Dispose(); }
+            if (disposing) { timer.Dispose(); flashTimer.Dispose(); tip.Dispose(); lampTip.Dispose(); }
             base.Dispose(disposing);
         }
     }

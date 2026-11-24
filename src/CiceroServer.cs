@@ -403,11 +403,13 @@ namespace RFIDlibra
             int len = 0;
             if (req.Headers.TryGetValue("Content-Length", out lenS)) int.TryParse(lenS, out len);
             if (len < 0 || len > 65536) throw new IOException("for stor forespørgsel");
-            byte[] skip = new byte[1024];
+            MemoryStream body = new MemoryStream();
+            byte[] chunk = new byte[1024];
             while (len > 0)
             {
-                int n = inp.Read(skip, 0, Math.Min(len, skip.Length));
+                int n = inp.Read(chunk, 0, Math.Min(len, chunk.Length));
                 if (n <= 0) break;
+                body.Write(chunk, 0, n);
                 len -= n;
             }
 
@@ -424,6 +426,18 @@ namespace RFIDlibra
                     string k = e >= 0 ? pair.Substring(0, e) : pair;
                     string v = e >= 0 ? pair.Substring(e + 1) : "";
                     req.Query[Decode(k)] = Decode(v);
+                }
+            }
+            // Brugerfladen sender formularer (fx adgangskoder) i selve forespørgslen, så de ikke står i adressen
+            string ctype;
+            if (req.Path.StartsWith("/app/") && body.Length > 0 && req.Headers.TryGetValue("Content-Type", out ctype)
+                && ctype.StartsWith("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (string pair in Encoding.UTF8.GetString(body.ToArray()).Split('&'))
+                {
+                    if (pair.Length == 0) continue;
+                    int e = pair.IndexOf('=');
+                    req.Query[Decode(e >= 0 ? pair.Substring(0, e) : pair)] = Decode(e >= 0 ? pair.Substring(e + 1) : "");
                 }
             }
             return req;

@@ -324,6 +324,16 @@
   dl.info a { color: #1d4a57; }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
   .hint { color: #5b6b70; font-size: 13.5px; margin-top: 8px; }
+  .gatebody { margin-top: 16px; display: none; }
+  .gatebody.on { display: block; }
+  .gatebody h4 { font-size: 14.5px; font-weight: 600; margin: 22px 0 10px; }
+  .gategrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .gategrid label.f { margin-top: 0; }
+  .formgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+  .formgrid .wide { grid-column: 1 / -1; }
+  @media (max-width: 640px) { .formgrid { grid-template-columns: 1fr; } }
+  .gatestat { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 0 0 14px; }
+  .gatestat .dot { flex: none; }
 
   .log {
     background: var(--petrol-deep);
@@ -461,6 +471,39 @@
         </div>
         <div class="chips" id="libChips"></div>
         <p class="hint">Bruges, når en tom chip programmeres. Chips, der allerede har et biblioteksnummer, beholder det.</p>
+      </div>
+      <div class="panel">
+        <h3>Gatealarmer</h3>
+        <label class="switch"><input type="checkbox" id="swGate"> Vis gatealarmer i skrankevinduet</label>
+        <p class="hint">Hver port får en lampe i skrankevinduet. Grøn: alt er roligt. Gul blinker: alarm på et udlånt materiale. Rød blinker: alarm på et materiale, der ikke er udlånt, eller hvis status ikke kunne slås op. Lampen blinker i 20 sekunder. Hold musen over en lampe for at se de seneste alarmer, og dobbeltklik for hele listen.</p>
+        <div class="gatebody" id="gateBody">
+          <div class="gatestat"><span class="dot" id="gateDot"></span><span id="gateStatus"></span></div>
+          <label class="f" for="inGateServer">Gatetracker (adresse og port)</label>
+          <input class="text" id="inGateServer" style="max-width:320px" spellcheck="false" placeholder="fx 192.168.130.31:6008" data-g>
+          <p class="hint">RFIDlibra lytter kun på gatetrackeren og sender aldrig noget til den.</p>
+          <h4>Navne på portene</h4>
+          <div class="gategrid" id="gateNames"></div>
+          <p class="hint">Et navn erstatter "Port 1" osv. i skrankevinduet og listen.</p>
+          <h4>Opslag i Cicero (SIP2)</h4>
+          <div class="formgrid">
+            <div class="wide"><label class="f" for="inSipUrl">Adresse</label><input class="text" id="inSipUrl" spellcheck="false" data-g></div>
+            <div><label class="f" for="inSipUser">Bruger</label><input class="text" id="inSipUser" spellcheck="false" autocomplete="off" data-g></div>
+            <div><label class="f" for="inSipPw">Adgangskode</label><input class="text" id="inSipPw" type="password" autocomplete="new-password" data-g></div>
+            <div><label class="f" for="inSipInst">Institution</label><input class="text" id="inSipInst" spellcheck="false" style="max-width:200px" data-g></div>
+          </div>
+          <p class="hint">Brug en SIP2-konto fra Cicero. Opslagene ændrer ingenting i Cicero. Adgangskoden gemmes krypteret på pc'en og står aldrig i loggen.</p>
+          <div class="row" style="margin-top:16px">
+            <button class="btn primary" id="bGateSave">Gem</button>
+            <button class="btn" id="bGateTest">Gem og test login</button>
+            <button class="btn" id="bGateList">Vis alarmer</button>
+          </div>
+          <p class="hint" id="sipStatus"></p>
+          <p class="hint" id="gateSource"></p>
+          <div id="gateAllBox" style="display:none;margin-top:14px">
+            <div class="row"><button class="btn" id="bGateAll">Gem for alle brugere på pc'en</button></div>
+            <p class="hint">Kræver administrative rettigheder på pc'en. Brugere, der selv har gemt indstillinger, beholder deres egne.</p>
+          </div>
+        </div>
       </div>
       <div class="panel">
         <h3>Start</h3>
@@ -889,6 +932,78 @@ $("bLib").onclick = async () => {
   await post("settings", { library: v });
   toast(v ? "Biblioteksnummer gemt" : "Biblioteksnummer fjernet");
 };
+// Gatealarmer
+let gateDirty = false, gateNamesKey = "";
+$("gateBody").addEventListener("input", e => { if (e.target.matches("[data-g]")) gateDirty = true; });
+function gateForm() {
+  const f = { server: $("inGateServer").value.trim(), sip2url: $("inSipUrl").value.trim(), sip2user: $("inSipUser").value.trim(), institution: $("inSipInst").value.trim() };
+  const pw = $("inSipPw").value;
+  if (pw) f.password = pw;
+  document.querySelectorAll("#gateNames input").forEach(i => f["name" + i.dataset.no] = i.value.trim());
+  return f;
+}
+function postForm(path, fields) {
+  return fetch("/app/api/" + path + "?t=" + encodeURIComponent(T), {
+    method: "POST", cache: "no-store",
+    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=utf-8" },
+    body: new URLSearchParams(fields).toString()
+  }).then(r => r.json());
+}
+async function saveGate(extra) {
+  const r = await postForm("gate", Object.assign(gateForm(), extra || {})).catch(() => ({ ok: false, message: "RFIDlibra svarede ikke" }));
+  if (r.ok) { gateDirty = false; $("inSipPw").value = ""; }
+  return r;
+}
+$("swGate").onchange = async e => {
+  const r = await postForm("gate", { enabled: e.target.checked ? 1 : 0 });
+  toast(e.target.checked ? "Gatealarmer er slået til" : "Gatealarmer er slået fra", !r.ok);
+};
+$("bGateSave").onclick = async () => { const r = await saveGate(); toast(r.message, !r.ok || /Kunne ikke|skal/.test(r.message)); };
+$("bGateTest").onclick = async () => {
+  const b = $("bGateTest");
+  b.disabled = true; b.textContent = "Tester …";
+  const s1 = await saveGate();
+  const r = s1.ok ? await post("gate/test").catch(() => ({ ok: false, message: "RFIDlibra svarede ikke" })) : s1;
+  b.disabled = false; b.textContent = "Gem og test login";
+  toast(r.message, !/^Login godkendt/.test(r.message));
+};
+$("bGateList").onclick = () => post("gate/list");
+$("bGateAll").onclick = async () => {
+  const b = $("bGateAll");
+  if (gateDirty) { const s1 = await saveGate(); if (!s1.ok) { toast(s1.message, true); return; } }
+  b.disabled = true; b.textContent = "Venter på administrator …";
+  const r = await post("gate/all").catch(() => ({ ok: false, message: "RFIDlibra svarede ikke" }));
+  b.disabled = false; b.textContent = "Gem for alle brugere på pc'en";
+  toast(r.message, !/er gemt/.test(r.message));
+};
+function renderGate() {
+  const g = S.gate;
+  if (!g) return;
+  $("swGate").checked = g.enabled;
+  $("gateBody").classList.toggle("on", g.enabled);
+  $("gateDot").className = "dot " + (g.connected ? "ok" : g.server ? "bad" : "wait");
+  $("gateStatus").textContent = g.connected
+    ? "Forbundet til gatetrackeren" + (g.alarms ? " – " + g.alarms + (g.alarms === 1 ? " alarm" : " alarmer") + " siden start" : "")
+    : (g.status || "Skriv gatetrackerens adresse og tryk Gem");
+  $("sipStatus").textContent = g.sip2Status ? "Seneste test: " + g.sip2Status : "";
+  $("gateSource").textContent = g.source === "pc" ? "Indstillingerne er fælles for alle brugere på pc'en." : g.source === "bruger" ? "Indstillingerne er gemt for dig." : "";
+  $("gateAllBox").style.display = S.settings.allUsers && g.source === "bruger" ? "block" : "none";
+  if (!gateDirty) {
+    const act = document.activeElement;
+    const set = (id, v) => { if (act !== $(id)) $(id).value = v; };
+    set("inGateServer", g.server);
+    set("inSipUrl", g.sip2url);
+    set("inSipUser", g.sip2user);
+    set("inSipInst", g.institution);
+    $("inSipPw").placeholder = g.hasPassword ? "Gemt – skriv for at ændre" : "";
+    const key = JSON.stringify(g.gates);
+    if (key !== gateNamesKey) {
+      gateNamesKey = key;
+      $("gateNames").innerHTML = g.gates.map(x => '<div><label class="f" for="gn' + x.no + '">Port ' + x.no + '</label><input class="text" id="gn' + x.no + '" data-no="' + x.no + '" data-g placeholder="Port ' + x.no + '" value="' + esc(x.name) + '" spellcheck="false"></div>').join("");
+    }
+  }
+}
+
 $("swAuto").onchange = async e => {
   const r = await post("settings", { autostart: e.target.checked ? 1 : 0 });
   toast(r.message, !r.ok || /lykkedes ikke/.test(r.message));
@@ -972,6 +1087,7 @@ function renderTop() {
     ? "Kræver administrative rettigheder på pc'en. Hver brugers egne indstillinger bliver liggende."
     : "Kræver administrative rettigheder på pc'en. Programmet og FEIG's feusb.dll lægges i " + S.settings.allUsersDir + ", og det starter for alle, der logger på. Biblioteksnummeret gemmes til hele pc'en. Vinduets plads og kompakt visning gemmes stadig pr. bruger.";
   $("swRaw").checked = S.settings.logRaw;
+  renderGate();
   const libs = [...new Set(S.tags.filter(t => t.kind === "danish" && t.library).map(t => t.library))].filter(l => l !== S.settings.library);
   $("libChips").innerHTML = libs.map(l => '<button class="btn small" data-lib="' + esc(l) + '">Brug DK-' + esc(l) + " fra chippen på læseren</button>").join("");
 }

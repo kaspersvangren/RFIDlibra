@@ -91,6 +91,10 @@ namespace RFIDlibra
                             return;
                         }
                     case "reconnect": app.Reconnect(); Ok(outp, "Forbinder igen"); return;
+                    case "gate": Ok(outp, app.SetGate(req.Query)); return;
+                    case "gate/test": Ok(outp, app.TestSip2()); return;
+                    case "gate/all": Ok(outp, app.SaveGateForAll()); return;
+                    case "gate/list": app.OpenAlarms(0); Ok(outp, ""); return;
                     case "allusers": Ok(outp, app.SetAllUsers(Q(req, "on") == "1")); return;
                     case "show": app.ShowWidget(); Ok(outp, ""); return;
                     case "tool/alarm": Tool(outp, app.Worker == null ? null : app.Worker.ToolAlarm(Q(req, "mac"), Q(req, "on") == "1")); return;

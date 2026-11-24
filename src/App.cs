@@ -13,7 +13,7 @@ namespace RFIDlibra
 {
     public static class AppInfo
     {
-        public const string Version = "1.1.1";
+        public const string Version = "1.2.0";
 
         public static string DataDir
         {
@@ -62,6 +62,12 @@ namespace RFIDlibra
         private readonly Control invoker = new Control();   // til at køre ting på brugerfladens tråd (COM, menuer)
         private readonly Widget widget;
         public UpdateCheck Updates { get; private set; }
+        public GateWatch Gates { get; private set; }
+        private readonly Timer blinkTimer = new Timer { Interval = 300 };
+        private readonly Dictionary<string, Icon> icons = new Dictionary<string, Icon>();
+        private bool blinkOn;
+        private AlarmWindow alarms;
+        private volatile string sip2Status = "";
 
         public App(bool background)
         {
@@ -73,6 +79,7 @@ namespace RFIDlibra
             if (library.Length == 0) library = AllUsers.MachineLibrary;   // sat til hele pc'en ved "Installer for alle brugere"
             invoker.CreateControl();
             Updates = new UpdateCheck(Log, invoker);
+            Gates = new GateWatch(Log);
 
             Log.Write("RFIDlibra " + AppInfo.Version + " startet" + (background ? " i baggrunden" : "") + ". Windows " + Environment.OSVersion.Version);
             if (Log.FilePath != null) Log.Write("Loggen gemmes også her: " + Log.FilePath);
@@ -107,9 +114,12 @@ namespace RFIDlibra
 
             CheckServices();
             StartReader();
+            if (Gates.Settings.Enabled) { Log.Write("Gatealarmer er slået til."); Gates.Start(); }
 
             timer.Tick += (s, e) => { UpdateTray(); Updates.Tick(); if ((DateTime.Now - lastServiceCheck).TotalSeconds > 10) CheckServices(); };
             timer.Start();
+            blinkTimer.Tick += (s, e) => BlinkTray();
+            blinkTimer.Start();
 
             if (!Widget.StartHidden) widget.ShowWidget();
             else Log.Write("Skrankevinduet er skjult - vis det fra ikonet ved uret.");
@@ -117,9 +127,24 @@ namespace RFIDlibra
 
         private void AddPages(ContextMenuStrip m)
         {
+            int at = m.Items.Count;
             m.Items.Add("Værktøj til tags", null, (s, e) => OpenTool());
             m.Items.Add("Indstillinger", null, (s, e) => Open("indstillinger"));
             m.Items.Add("Fejlfinding", null, (s, e) => Open("fejlfinding"));
+            ToolStripMenuItem al = new ToolStripMenuItem("Gatealarmer", null, (s, e) => OpenAlarms(0));
+            m.Opening += (s, e) => al.Visible = Gates.Settings.Enabled;
+            m.Items.Insert(at + 1, al);
+        }
+
+        /// <summary>Åbner listen over gatealarmer, filtreret til en port (0 = alle).</summary>
+        public void OpenAlarms(int gate)
+        {
+            if (invoker.InvokeRequired) { invoker.BeginInvoke((Action)(() => OpenAlarms(gate))); return; }
+            if (alarms == null || alarms.IsDisposed) alarms = new AlarmWindow(Gates, gate);
+            else alarms.ShowGate(gate);
+            if (!alarms.Visible) alarms.Show();
+            if (alarms.WindowState == FormWindowState.Minimized) alarms.WindowState = FormWindowState.Normal;
+            alarms.Activate();
         }
 
         public void Open(string page)
@@ -179,6 +204,7 @@ namespace RFIDlibra
                 BindError = server.BindError,
                 StaffConnect = staffConnect,
                 Tags = readerOk ? w.Views : new TagView[0],
+                Gates = Gates.Settings.Enabled ? Gates.View() : null,
             };
         }
 
@@ -338,8 +364,100 @@ namespace RFIDlibra
             sb.Append(",\"updateStatus\":").Append(Json.Str(Updates.Status));
             sb.Append(",\"repo\":").Append(Json.Str(UpdateCheck.RepoUrl));
             sb.Append(",\"logRaw\":").Append(w != null && w.LogRaw ? "true" : "false");
-            sb.Append("}}");
+            sb.Append("},\"gate\":").Append(GateJson());
+            sb.Append("}");
             return sb.ToString();
+        }
+
+        // ---------- Gatealarmer ----------
+
+        private string GateJson()
+        {
+            GateSettings g = Gates.Settings;
+            GateSettings d = new GateSettings();
+            GateWatch.Defaults(d, library);
+            StringBuilder sb = new StringBuilder("{");
+            sb.Append("\"enabled\":").Append(g.Enabled ? "true" : "false");
+            sb.Append(",\"server\":").Append(Json.Str(g.Server));
+            sb.Append(",\"sip2url\":").Append(Json.Str(g.Sip2Url.Length > 0 ? g.Sip2Url : d.Sip2Url));
+            sb.Append(",\"sip2user\":").Append(Json.Str(g.Sip2User));
+            sb.Append(",\"hasPassword\":").Append(g.Sip2Password.Length > 0 ? "true" : "false");
+            sb.Append(",\"institution\":").Append(Json.Str(g.Institution.Length > 0 ? g.Institution : d.Institution));
+            sb.Append(",\"source\":").Append(Json.Str(g.Source));
+            sb.Append(",\"connected\":").Append(Gates.Connected ? "true" : "false");
+            sb.Append(",\"status\":").Append(Json.Str(Gates.Status));
+            sb.Append(",\"sip2Status\":").Append(Json.Str(sip2Status));
+            sb.Append(",\"alarms\":").Append(Gates.AlarmCount);
+            sb.Append(",\"gates\":[");
+            List<int> list = Gates.Gates();
+            foreach (int n in g.Names.Keys) if (!list.Contains(n)) list.Add(n);
+            list.Sort();
+            for (int i = 0; i < list.Count; i++)
+            {
+                string name;
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"no\":").Append(list[i]).Append(",\"name\":").Append(Json.Str(g.Names.TryGetValue(list[i], out name) ? name : "")).Append('}');
+            }
+            sb.Append("]}");
+            return sb.ToString();
+        }
+
+        /// <summary>Gemmer indstillingerne fra siden. Adgangskoden ændres kun, hvis der er skrevet en ny.</summary>
+        public string SetGate(Dictionary<string, string> q)
+        {
+            GateSettings old = Gates.Settings;
+            GateSettings n = new GateSettings
+            {
+                Enabled = Get(q, "enabled", old.Enabled ? "1" : "0") == "1",
+                Server = Get(q, "server", old.Server).Trim(),
+                Sip2Url = Get(q, "sip2url", old.Sip2Url).Trim(),
+                Sip2User = Get(q, "sip2user", old.Sip2User).Trim(),
+                Institution = Get(q, "institution", old.Institution).Trim(),
+                Sip2Password = old.Sip2Password,
+                Names = new Dictionary<int, string>(old.Names),
+            };
+            string pw = Get(q, "password", "");
+            if (pw.Length > 0) n.Sip2Password = pw;
+            if (Get(q, "clearPassword", "") == "1") n.Sip2Password = "";
+            foreach (KeyValuePair<string, string> kv in q)
+            {
+                int no;
+                if (kv.Key.StartsWith("name") && int.TryParse(kv.Key.Substring(4), out no) && no > 0 && no < 100) n.Names[no] = kv.Value.Trim();
+            }
+            GateWatch.Defaults(n, library);
+            try { n.SaveForUser(); }
+            catch (Exception e) { return "Kunne ikke gemme: " + e.Message; }
+            bool wasOn = old.Enabled;
+            Gates.Apply(n);
+            if (n.Enabled && !wasOn) Log.Write("Gatealarmer er slået til (" + n.Server + ").");
+            if (n.Enabled && n.Server.Length == 0) return "Gemt – skriv gatetrackerens adresse";
+            if (n.Enabled && !n.Sip2Url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return "Gemt – SIP2-adressen skal begynde med https://";
+            return "Gemt";
+        }
+
+        private static string Get(Dictionary<string, string> q, string k, string def)
+        {
+            string v;
+            return q.TryGetValue(k, out v) ? v : def;
+        }
+
+        /// <summary>Logger ind i Cicero med SIP2 og spørger efter status. Kører på en baggrundstråd fra siden.</summary>
+        public string TestSip2()
+        {
+            bool ok;
+            string msg = Gates.Sip2.Test(out ok);
+            sip2Status = (ok ? "✓ " : "✗ ") + msg + " (" + DateTime.Now.ToString("HH:mm") + ")";
+            Log.Write("SIP2-test: " + msg);
+            return msg;
+        }
+
+        public string SaveGateForAll()
+        {
+            Log.Write("Gemmer gatealarmer for alle brugere - Windows beder om administrator.");
+            bool ok;
+            string msg = AllUsers.SaveGateForAll(GateSettings.UserFile, out ok);
+            Log.Write(msg);
+            return msg;
         }
 
         // ---------- Ikonet ved uret ----------
@@ -367,13 +485,44 @@ namespace RFIDlibra
                 key = "green"; c = Color.FromArgb(40, 167, 92);
                 text = "Læseren er klar - Cicero lytter";
             }
+            statusKey = key; statusColor = c;
+            GateView gv = TrayBlinkView();
+            if (gv != null)
+            {
+                LampView l = gv.Lamps.FirstOrDefault(x => x.State == LampState.Red) ?? gv.Lamps.First(x => x.State == LampState.Yellow);
+                text = "Gatealarm – " + l.Name;
+            }
             string tip = "RFIDlibra: " + text;
             tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
+            if (gv == null) SetTrayIcon(key, c);
+        }
+
+        private string statusKey = ""; private Color statusColor;
+
+        /// <summary>Gatealarmer, der skal blinke i ikonet ved uret - kun når skrankevinduet er skjult.</summary>
+        private GateView TrayBlinkView()
+        {
+            if (!Gates.Settings.Enabled || widget == null || widget.Visible) return null;
+            GateView v = Gates.View();
+            return v.Blinking ? v : null;
+        }
+
+        private void BlinkTray()
+        {
+            GateView v = TrayBlinkView();
+            if (v == null) { if (iconKey != null && iconKey.StartsWith("alarm")) { SetTrayIcon(statusKey, statusColor); UpdateTray(); } return; }
+            blinkOn = !blinkOn;
+            if (blinkOn) SetTrayIcon(v.AnyRed ? "alarm-red" : "alarm-yellow", v.AnyRed ? Color.FromArgb(0xff, 0x4d, 0x5e) : Color.FromArgb(0xf7, 0xb7, 0x2b));
+            else SetTrayIcon(statusKey, statusColor);
+        }
+
+        private void SetTrayIcon(string key, Color c)
+        {
             if (key == iconKey) return;
             iconKey = key;
-            Icon old = tray.Icon;
-            tray.Icon = MakeIcon(c);
-            if (old != null) old.Dispose();
+            Icon ic;
+            if (!icons.TryGetValue(key, out ic)) { ic = MakeIcon(c); icons[key] = ic; }
+            tray.Icon = ic;
         }
 
         /// <summary>Tegner ikonet: farvet cirkel (status) med to hvide "radiobølger".</summary>
@@ -401,7 +550,10 @@ namespace RFIDlibra
         private void Quit()
         {
             timer.Stop();
+            blinkTimer.Stop();
             Log.Write("Afslutter.");
+            Gates.Stop();
+            if (alarms != null && !alarms.IsDisposed) alarms.Close();
             int closed = Launcher.CloseAll();
             if (closed > 0) Log.Write("Lukkede " + closed + " vindue(r) med Indstillinger/Fejlfinding.");
             Worker w = Worker;
