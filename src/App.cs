@@ -13,7 +13,7 @@ namespace RFIDlibra
 {
     public static class AppInfo
     {
-        public const string Version = "1.2.0";
+        public const string Version = "1.2.1";
 
         public static string DataDir
         {
@@ -136,7 +136,7 @@ namespace RFIDlibra
             m.Items.Insert(at + 1, al);
         }
 
-        /// <summary>Åbner listen over gatealarmer, filtreret til en port (0 = alle).</summary>
+        /// <summary>Åbner listen over gatealarmer, filtreret til en gate (0 = alle).</summary>
         public void OpenAlarms(int gate)
         {
             if (invoker.InvokeRequired) { invoker.BeginInvoke((Action)(() => OpenAlarms(gate))); return; }

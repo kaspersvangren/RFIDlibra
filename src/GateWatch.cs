@@ -30,7 +30,7 @@ namespace RFIDlibra
         public string Name(int gate)
         {
             string n;
-            return Names.TryGetValue(gate, out n) && n.Trim().Length > 0 ? n.Trim() : "Port " + gate;
+            return Names.TryGetValue(gate, out n) && n.Trim().Length > 0 ? n.Trim() : "Gate " + gate;
         }
 
         public static GateSettings Load()
@@ -169,6 +169,30 @@ namespace RFIDlibra
             this.log = log;
             settings = GateSettings.Load();
             ApplySip2();
+            // Antal gates, som gatetrackeren sidst meldte - så der er det rigtige antal lamper fra start
+            List<int> known = ParseGates(AppInfo.Load(KnownFile));
+            if (known.Count > 0) gates = known;
+        }
+
+        private const string KnownFile = "gates-kendt.txt";
+
+        private static List<int> ParseGates(string s)
+        {
+            List<int> g = new List<int>();
+            foreach (string x in (s ?? "").Split(';'))
+            {
+                int v;
+                if (int.TryParse(x.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out v) && v > 0 && v < 100 && !g.Contains(v)) g.Add(v);
+            }
+            g.Sort();
+            return g;
+        }
+
+        private void RememberGates()
+        {
+            string s;
+            lock (sync) s = string.Join(";", gates.Select(x => x.ToString(CultureInfo.InvariantCulture)));
+            AppInfo.Save(KnownFile, s);
         }
 
         public GateSettings Settings { get { lock (sync) return settings; } }
@@ -316,9 +340,10 @@ namespace RFIDlibra
             string name = parts[0];
             if (name == "UpdatePeopleCounter" && parts.Length > 2)
             {
-                List<int> g = new List<int>();
-                foreach (string x in parts[2].Split(';')) { int v; if (int.TryParse(x, NumberStyles.Integer, CultureInfo.InvariantCulture, out v) && v > 0 && v < 100) g.Add(v); }
-                if (g.Count > 0) lock (sync) if (!g.SequenceEqual(gates)) gates = g;
+                List<int> g = ParseGates(parts[2]);
+                bool changed = false;
+                if (g.Count > 0) lock (sync) if (!g.SequenceEqual(gates)) { gates = g; changed = true; }
+                if (changed) RememberGates();
                 return;
             }
             if (name != "Add") return;
@@ -339,15 +364,17 @@ namespace RFIDlibra
             string title = f.TryGetValue("LMS.ItemTitle", out v2) && v2.Trim().Length > 0 ? v2.Trim() : f.TryGetValue("Title", out v2) ? v2.Trim() : "";
 
             GateAlarm a;
+            bool newGate = false;
             lock (sync)
             {
                 if (!seenIds.Add(id)) return;
                 if (seenIds.Count > 5000) seenIds.Clear();
-                if (!gates.Contains(gate)) { gates.Add(gate); gates.Sort(); }
+                if (!gates.Contains(gate) && gate > 0 && gate < 100) { gates.Add(gate); gates.Sort(); newGate = true; }
                 a = new GateAlarm { Seq = ++seq, Time = DateTime.Now, Gate = gate, Barcode = barcode, Title = title.Length > 0 ? title : "Ukendt titel" };
                 alarms.Insert(0, a);
                 if (alarms.Count > MaxAlarms) alarms.RemoveAt(alarms.Count - 1);
             }
+            if (newGate) RememberGates();
             ThreadPool.QueueUserWorkItem(_ => LookUp(a));
             ThreadPool.QueueUserWorkItem(_ => { Thread.Sleep(WaitForLookupMs); lock (sync) if (a.ShownAt == null) { a.ShownAt = DateTime.Now; if (!a.Done) a.StatusText = "Slår stadig op …"; } });
         }

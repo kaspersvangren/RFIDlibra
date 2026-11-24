@@ -26,7 +26,7 @@ Et lille vindue uden kanter, der altid ligger øverst. Det kan trækkes rundt og
 - **Alarm fra** og **Alarm til** slår alarmen fra eller til på alle bøger på læseren. Vinduet blinker grønt eller orange, når alarmen skifter - også når Cicero gør det.
 - Højreklik (eller klik på de tre prikker) giver menuen: **Kompakt visning**, **Værktøj til tags**, **Gatealarmer** (når de er slået til), **Indstillinger**, **Fejlfinding**, **Skjul vinduet** og **Afslut**.
 - **Kompakt visning** er én smal stribe: status, antal bøger og knapperne **Fra** og **Til**. Mangler der en del af et sæt, står det med rødt ("Mangler del 2 af 3"). Hold musen over striben for at se materialenumrene. Valget huskes.
-- **Gatealarmer** (hvis de er slået til): én lampe pr. port - vandrette øverst i den normale visning, lodrette i venstre kant i den kompakte. Se nedenfor.
+- **Gatealarmer** (hvis de er slået til): én lampe pr. gate - vandrette øverst i den normale visning, lodrette i venstre kant i den kompakte. Se nedenfor.
 
 ## Gatealarmer
 
@@ -35,13 +35,13 @@ RFIDlibra kan vise alarmer fra bibliotekets gates (Bibliothecas gatetracker, den
 - **Grøn**: forbundet, ingen alarmer. **Grå**: ingen forbindelse til gatetrackeren.
 - **Gul, blinker langsomt**: alarm på et materiale, der er udlånt.
 - **Rød, blinker hurtigt**: alarm på et materiale, der ikke er udlånt - eller hvis status ikke kunne slås op.
-- Lampen blinker i 20 sekunder. En ny alarm på samme port starter forfra, og rød vinder over gul.
-- Hold musen over en lampe for at se portens tre seneste alarmer (tid, titel, forfatter, status og materialenummer). Dobbeltklik for listen over alle alarmer, nyeste øverst, med et filter pr. port. Dobbeltklik på en alarm i listen kopierer materialenummeret. Listen findes kun, mens RFIDlibra kører.
+- Lampen blinker i 20 sekunder. En ny alarm på samme gate starter forfra, og rød vinder over gul.
+- Hold musen over en lampe for at se gatens tre seneste alarmer (tid, titel, forfatter, status og materialenummer). Dobbeltklik for listen over alle alarmer, nyeste øverst, med et filter pr. gate. Dobbeltklik på en alarm i listen kopierer materialenummeret. Listen findes kun, mens RFIDlibra kører.
 - Er skrankevinduet skjult, blinker ikonet ved uret i stedet.
 
 Gatetrackeren fortæller ikke, om et materiale er udlånt, så RFIDlibra slår det op i Cicero med SIP2 (som selvbetjeningsautomaterne). Det kræver en SIP2-konto fra Cicero. Adressen er `https://cicero-fbs.com/rest/sip2/DK-<biblioteksnummer>` for FBS-biblioteker og `https://cicero-lms.com/rest/sip2/DK-<biblioteksnummer>` for de andre; RFIDlibra foreslår FBS-adressen ud fra biblioteksnummeret. Opslagene ændrer ingenting i Cicero. Adgangskoden gemmes krypteret med Windows (kan kun læses på samme pc) og står aldrig i loggen.
 
-RFIDlibra sender aldrig noget til gatetrackeren - den forbinder kun og lytter. Portene kan have egne navne (fx "Hovedindgang"). Indstillingerne gemmes pr. bruger i `%LOCALAPPDATA%\RFIDlibra\porte.txt`. Er RFIDlibra installeret for alle brugere, kan de gemmes for hele pc'en med *Gem for alle brugere på pc'en* (kræver administrative rettigheder); de ligger så i `C:\ProgramData\RFIDlibra\porte.txt` og bruges af alle, der ikke selv har gemt nogen.
+RFIDlibra sender aldrig noget til gatetrackeren - den forbinder kun og lytter. Antallet af gates kommer fra gatetrackeren, og hver gate kan have sit eget navn (fx "Hovedindgang"); ellers hedder de "Gate 1", "Gate 2" osv. Indstillingerne gemmes pr. bruger i `%LOCALAPPDATA%\RFIDlibra\porte.txt`. Er RFIDlibra installeret for alle brugere, kan de gemmes for hele pc'en med *Gem for alle brugere på pc'en* (kræver administrative rettigheder); de ligger så i `C:\ProgramData\RFIDlibra\porte.txt` og bruges af alle, der ikke selv har gemt nogen.
 
 ## De andre vinduer
 

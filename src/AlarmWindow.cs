@@ -9,19 +9,19 @@ using System.Windows.Forms;
 namespace RFIDlibra
 {
     /// <summary>
-    /// Listen over gatealarmer, nyeste øverst. Filter pr. port. Kun i hukommelsen - forsvinder, når RFIDlibra lukkes.
+    /// Listen over gatealarmer, nyeste øverst. Filter pr. gate. Kun i hukommelsen - forsvinder, når RFIDlibra lukkes.
     /// </summary>
     public sealed class AlarmWindow : Form
     {
         private readonly GateWatch gates;
         private readonly Timer timer = new Timer { Interval = 1000 };
         private readonly FlowLayoutPanel chips = new FlowLayoutPanel();
-        private readonly ListBox list = new ListBox();
+        private readonly BufferedList list = new BufferedList();
         private readonly Label empty = new Label();
         private readonly Label foot = new Label();
         private readonly Label conn = new Label();
         private float s = 1f;
-        private int filter;               // 0 = alle porte
+        private int filter;               // 0 = alle gates
         private string chipKey = "", listKey = "";
         private DateTime footUntil = DateTime.MinValue;
         private const string FootHint = "Dobbeltklik på en alarm for at kopiere materialenummeret. Listen forsvinder, når RFIDlibra lukkes.";
@@ -107,7 +107,7 @@ namespace RFIDlibra
 
         private int Px(float v) { return (int)Math.Round(v * s); }
 
-        /// <summary>Viser vinduet filtreret til en port (0 = alle).</summary>
+        /// <summary>Viser vinduet filtreret til en gate (0 = alle).</summary>
         public void ShowGate(int gate)
         {
             filter = gate;
@@ -132,8 +132,8 @@ namespace RFIDlibra
         private void UpdateList()
         {
             GateView v = gates.View();
-            conn.Text = v.Connected ? "Forbundet til gatetrackeren" : (v.StatusText.Length > 0 ? v.StatusText : "Ikke forbundet til gatetrackeren");
-            conn.ForeColor = v.Connected ? Look.InkMuted : Look.Red;
+            string ct = v.Connected ? "Forbundet til gatetrackeren" : (v.StatusText.Length > 0 ? v.StatusText : "Ikke forbundet til gatetrackeren");
+            if (conn.Text != ct) { conn.Text = ct; conn.ForeColor = v.Connected ? Look.InkMuted : Look.Red; }
             if (DateTime.Now > footUntil && foot.Text != FootHint) { foot.Text = FootHint; foot.ForeColor = Look.InkMuted; }
 
             string ck = filter + "|" + string.Join(",", v.Lamps.Select(l => l.Gate + "=" + l.Name));
@@ -142,13 +142,17 @@ namespace RFIDlibra
             List<GateAlarm> all = gates.Alarms();
             List<GateAlarm> shown = filter == 0 ? all : all.Where(a => a.Gate == filter).ToList();
             string lk = filter + "|" + string.Join(",", shown.Select(a => a.Seq + a.StatusText + a.Title));
-            if (lk == listKey) { list.Invalidate(); return; }
+            if (lk == listKey) return;   // intet nyt - tegn ikke listen igen (det flimrer)
             listKey = lk;
             GateAlarm keep = Selected();
+            int top = list.Items.Count > 0 ? list.TopIndex : 0;
+            GateAlarm topItem = list.Items.Count > top ? list.Items[top] as GateAlarm : null;
             list.BeginUpdate();
             list.Items.Clear();
             foreach (GateAlarm a in shown) list.Items.Add(a);
             if (keep != null) { int i = shown.IndexOf(keep); if (i >= 0) list.SelectedIndex = i; }
+            // Bliv stående, hvor man var i listen, når der kommer nye alarmer øverst (medmindre man var helt oppe)
+            if (top > 0 && topItem != null) { int i = shown.IndexOf(topItem); if (i >= 0) list.TopIndex = i; }
             list.EndUpdate();
             empty.Visible = shown.Count == 0;
             list.Visible = shown.Count > 0;
@@ -158,7 +162,7 @@ namespace RFIDlibra
         private static string NameOf(GateView v, int gate)
         {
             LampView l = v.Lamps.FirstOrDefault(x => x.Gate == gate);
-            return l != null ? l.Name : "Port " + gate;
+            return l != null ? l.Name : "Gate " + gate;
         }
 
         private void BuildChips(GateView v)
@@ -166,7 +170,7 @@ namespace RFIDlibra
             chips.SuspendLayout();
             foreach (Control c in chips.Controls.Cast<Control>().ToList()) c.Dispose();
             chips.Controls.Clear();
-            AddChip("Alle porte", 0);
+            AddChip("Alle gates", 0);
             foreach (LampView l in v.Lamps) AddChip(l.Name, l.Gate);
             chips.ResumeLayout();
         }
@@ -254,6 +258,33 @@ namespace RFIDlibra
         {
             if (disposing) timer.Dispose();
             base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>Liste, der tegnes med mellemlager, så den ikke flimrer.</summary>
+    public sealed class BufferedList : ListBox
+    {
+        public BufferedList()
+        {
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            using (SolidBrush b = new SolidBrush(BackColor)) e.Graphics.FillRectangle(b, ClientRectangle);
+            for (int i = TopIndex; i < Items.Count; i++)
+            {
+                Rectangle r = GetItemRectangle(i);
+                if (r.Top > ClientRectangle.Bottom) break;
+                DrawItemState state = GetSelected(i) ? DrawItemState.Selected : DrawItemState.None;
+                OnDrawItem(new DrawItemEventArgs(e.Graphics, Font, r, i, state));
+            }
+        }
+
+        protected override void OnSelectedIndexChanged(EventArgs e)
+        {
+            base.OnSelectedIndexChanged(e);
+            Invalidate();
         }
     }
 }

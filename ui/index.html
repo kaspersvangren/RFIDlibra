@@ -475,15 +475,15 @@
       <div class="panel">
         <h3>Gatealarmer</h3>
         <label class="switch"><input type="checkbox" id="swGate"> Vis gatealarmer i skrankevinduet</label>
-        <p class="hint">Hver port får en lampe i skrankevinduet. Grøn: alt er roligt. Gul blinker: alarm på et udlånt materiale. Rød blinker: alarm på et materiale, der ikke er udlånt, eller hvis status ikke kunne slås op. Lampen blinker i 20 sekunder. Hold musen over en lampe for at se de seneste alarmer, og dobbeltklik for hele listen.</p>
+        <p class="hint">Hver gate får en lampe i skrankevinduet. Grøn: alt er roligt. Gul blinker: alarm på et udlånt materiale. Rød blinker: alarm på et materiale, der ikke er udlånt, eller hvis status ikke kunne slås op. Lampen blinker i 20 sekunder. Hold musen over en lampe for at se de seneste alarmer, og dobbeltklik for hele listen.</p>
         <div class="gatebody" id="gateBody">
           <div class="gatestat"><span class="dot" id="gateDot"></span><span id="gateStatus"></span></div>
           <label class="f" for="inGateServer">Gatetracker (adresse og port)</label>
           <input class="text" id="inGateServer" style="max-width:320px" spellcheck="false" placeholder="fx 192.168.130.31:6008" data-g>
           <p class="hint">RFIDlibra lytter kun på gatetrackeren og sender aldrig noget til den.</p>
-          <h4>Navne på portene</h4>
+          <h4>Navne på gates</h4>
           <div class="gategrid" id="gateNames"></div>
-          <p class="hint">Et navn erstatter "Port 1" osv. i skrankevinduet og listen.</p>
+          <p class="hint">Et navn erstatter "Gate 1" osv. i skrankevinduet og listen. Antallet af gates kommer fra gatetrackeren.</p>
           <h4>Opslag i Cicero (SIP2)</h4>
           <div class="formgrid">
             <div class="wide"><label class="f" for="inSipUrl">Adresse</label><input class="text" id="inSipUrl" spellcheck="false" data-g></div>
@@ -999,7 +999,7 @@ function renderGate() {
     const key = JSON.stringify(g.gates);
     if (key !== gateNamesKey) {
       gateNamesKey = key;
-      $("gateNames").innerHTML = g.gates.map(x => '<div><label class="f" for="gn' + x.no + '">Port ' + x.no + '</label><input class="text" id="gn' + x.no + '" data-no="' + x.no + '" data-g placeholder="Port ' + x.no + '" value="' + esc(x.name) + '" spellcheck="false"></div>').join("");
+      $("gateNames").innerHTML = g.gates.map(x => '<div><label class="f" for="gn' + x.no + '">Gate ' + x.no + '</label><input class="text" id="gn' + x.no + '" data-no="' + x.no + '" data-g placeholder="Gate ' + x.no + '" value="' + esc(x.name) + '" spellcheck="false"></div>').join("");
     }
   }
 }
